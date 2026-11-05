@@ -418,7 +418,15 @@ export class Vehicle {
       w.vlong = vl;
 
       let mu = (w.front ? spec.gripF : spec.gripR) * sProps.mu * env.weatherGrip * this.tune.gripMul;
-      if (w.surface !== Surface.Asphalt && w.surface !== Surface.Concrete) mu = lerp(mu, Math.max(mu, 0.95 * (w.front ? spec.gripF : spec.gripR)), spec.offroad * 0.6);
+      const paved = w.surface === Surface.Asphalt || w.surface === Surface.Concrete;
+      if (!paved) {
+        mu = lerp(mu, Math.max(mu, 0.95 * (w.front ? spec.gripF : spec.gripR)), spec.offroad * 0.6);
+        // below 0.2: slick road tyres + a low splitter scrabble on loose ground
+        mu *= 1 - 0.15 * clamp((0.2 - spec.offroad) / 0.2, 0, 1);
+      } else if (spec.offroad > 0.5) {
+        // knobbly off-road tyres squirm a little on tarmac
+        mu *= 1 - 0.24 * (spec.offroad - 0.5);
+      }
       if (env.iceRoads > 0 && (w.surface === Surface.Asphalt || w.surface === Surface.Concrete)) mu *= 1 - env.iceRoads * 0.35;
       const maxF = mu * Fs;
 
@@ -431,7 +439,8 @@ export class Vehicle {
         if (Math.abs(Fx) > maxF * tc) Fx = Math.sign(Fx) * maxF * tc;
       }
       // rolling resistance
-      Fx -= Math.sign(vl) * Math.min(Math.abs(vl) * 4, 1) * sProps.roll * mEff * (1 - spec.offroad * 0.5);
+      const lowCar = paved ? 0 : clamp((0.2 - spec.offroad) / 0.2, 0, 1);
+      Fx -= Math.sign(vl) * Math.min(Math.abs(vl) * 4, 1) * sProps.roll * mEff * (1 - spec.offroad * 0.5) * (1 + lowCar * 0.8);
       // brakes
       let brakeF = brake * spec.brake * (w.front ? 0.62 : 0.38) * 0.5;
       if (this.handbrake && !w.front) brakeF += spec.brake * 0.35;
@@ -581,10 +590,12 @@ export class Vehicle {
         // --- arcade drift controller: steering sets the slip angle, a PD yaw controller holds it ---
         const D = this.driftDir;
         const u = clamp(ctl.steer * D, -1, 1); // +1 = steering into the turn
-        let bt = 0.44 + 0.3 * u;
+        // steering into the turn deepens the angle; counter-steer winds the target down to zero so
+        // the slide always unwinds (the exit check below then ends the drift)
+        let bt = u >= 0 ? 0.44 + 0.3 * u : 0.44 * Math.max(0, 1 + u / 0.5);
         if (throttle < 0.2) bt *= 0.6; // lift to tighten up
         if (this.handbrake) bt = Math.max(bt, 0.7);
-        bt = clamp(bt, 0.08, 0.85) * clamp(spec.slide + 0.25, 0.7, 1.1);
+        bt = clamp(bt, 0.08, 0.85) * clamp(spec.slide + 0.25, 0.7, 1.1) * spec.driftAngle;
         this.driftTarget = D * bt;
         const err = beta - this.driftTarget; // beta = velocity heading - car heading
         const wDes = dVel / dt + err * 4.2 * assist;

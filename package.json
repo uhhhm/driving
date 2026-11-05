@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "handling": "tsx scripts/handling.ts --check"
   },
   "repository": {
     "type": "git",

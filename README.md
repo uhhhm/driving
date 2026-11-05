@@ -197,6 +197,14 @@ grabs a nearby angle, slows time to ~25% and letterboxes for a beat.
 
 ### Testing / tuning hooks
 
+`npm run handling` runs every car through a headless handling suite (straight line, braking,
+skidpad, turn-in, slalom, keyboard and gamepad drifts, rain/snow, off-road, boost, fully-upgraded
+rollover) using the real `Vehicle` + Rapier step. It enforces "still fun" guardrails for every car
+(no spin-outs, drifts that hold and exit cleanly, no rollovers in normal driving) plus personality
+checks (the Bulldozer out-drags the Kitsune, the Mule is king of the grass, the Bolt hates it…), and
+fails if the garage stat bars are stale. Tune with `npx tsx scripts/handling.ts --set mule.torque=800`
+and regenerate the bars with `--write`.
+
 `window.game` exposes the game in dev builds. `game.simulate(seconds, controlsFn, sampleFn)` runs
 the physics deterministically without rendering — the handling numbers above (drift angle,
 radius, loop completion, 0–100) were tuned with it. `scripts/` contains the headless Playwright

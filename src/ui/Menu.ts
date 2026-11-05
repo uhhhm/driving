@@ -2,6 +2,7 @@
 import { CARS, type CarSpec } from '../vehicle/VehicleDefs';
 import { PAINTS, UPGRADE_COST, type Save } from '../game/Save';
 import type { Upgrades } from '../vehicle/VehicleDefs';
+import { HANDLING_STATS } from '../vehicle/HandlingStats';
 
 export interface MenuResult {
   seed: string;
@@ -10,13 +11,8 @@ export interface MenuResult {
 }
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
-const STAT = (c: CarSpec) => ({
-  POWER: Math.min(1, c.torque / c.mass / 0.7),
-  GRIP: Math.min(1, (c.gripF + c.gripR - 1.6) / 0.9),
-  DRIFT: Math.min(1, c.slide * c.driftAssist * 1.1),
-  WEIGHT: Math.min(1, c.mass / 2200),
-  BOOST: Math.min(1, (c.boostForce * c.boostCapacity) / 8),
-});
+// Garage bars come from measured handling (scripts/handling.ts --write), not guesses from the spec.
+const STAT = (c: CarSpec) => HANDLING_STATS[c.id] ?? HANDLING_STATS.kitsune;
 
 const randomSeed = () => {
   const words = ['NEON', 'DUST', 'APEX', 'GHOST', 'VOLT', 'RIDGE', 'TIDE', 'EMBER', 'NOVA', 'RUST', 'COBALT', 'ZEN', 'FURY', 'MIRAGE', 'TURBO', 'ORBIT'];
