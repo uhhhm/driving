@@ -22,6 +22,8 @@ async function boot() {
   await game.init(seed, carId, save.data.paints[carId] ?? 0);
   (window as unknown as { game: Game; bus: typeof bus }).game = game;
   (window as unknown as { bus: typeof bus }).bus = bus;
+  (game as unknown as { __carById: typeof carById }).__carById = carById;
+  (window as unknown as { __R: unknown }).__R = (await import('./core/Physics')).RAPIER;
   new DebugPanel(game);
 
   // attract mode: the menu sits over a live, self-driving world

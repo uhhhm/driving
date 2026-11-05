@@ -96,6 +96,9 @@ export class Vehicle {
   slipAngleBody = 0; // beta
   drifting = false;
   driftMode = false;
+  driftDir = 1; // +1 tail out to the left (right-hand drift), -1 the other way
+  driftTarget = 0;
+  private prevVelYaw = 0;
   private latchPitch = false;
   onStunt = false;
   private latchSteer = false;
@@ -358,7 +361,7 @@ export class Vehicle {
     const steerLimit = 1 / (1 + Math.max(0, sp - 8) * 0.02 * spec.steerSpeedFalloff * 2);
     const assist = spec.driftAssist * this.tune.assistMul;
     let counter = 0;
-    if (horiz > 5 && this.speed > 0) counter = clamp(this.slipAngleBody, -0.6, 0.6) * assist * 0.9;
+    if (horiz > 5 && this.speed > 0) counter = clamp(this.slipAngleBody, -0.6, 0.6) * assist * (this.driftMode ? 0.75 : 0.5);
     const steerAngle = clamp(-ctl.steer * spec.maxSteer * steerLimit + counter, -spec.maxSteer * 1.2, spec.maxSteer * 1.2);
 
     // ---- drift state machine: grippy until you ask for a slide ----
@@ -370,11 +373,15 @@ export class Vehicle {
     if (!this.driftMode && enter && grounded >= 3) {
       this.driftMode = true;
       this.driftExitTimer = 0;
+      this.driftDir = absBeta > 0.1 ? Math.sign(this.slipAngleBody) : Math.sign(ctl.steer) || 1;
     }
     if (this.driftMode) {
-      if ((absBeta < 0.1 && !this.handbrake) || sp < 5 || grounded < 2) this.driftExitTimer += dt;
+      // transitions (flick from one side to the other)
+      if (Math.sign(this.slipAngleBody) !== this.driftDir && absBeta > 0.15) this.driftDir = Math.sign(this.slipAngleBody);
+      const counter = ctl.steer * this.driftDir < -0.3;
+      if ((absBeta < 0.12 && !this.handbrake) || sp < 5 || grounded < 2 || (counter && absBeta < 0.2)) this.driftExitTimer += dt;
       else this.driftExitTimer = 0;
-      if (this.driftExitTimer > 0.3) this.driftMode = false;
+      if (this.driftExitTimer > 0.25) this.driftMode = false;
     }
 
     // ---- per wheel forces ----
@@ -564,21 +571,33 @@ export class Vehicle {
           torque(up.x * k2, up.y * k2, up.z * k2);
         }
       }
-      if (this.drifting) {
-        // steering controls rotation directly in a slide; throttle keeps the slide flowing
-        torque(up.x * -ctl.steer * Iy * 2.2 * assist, up.y * -ctl.steer * Iy * 2.2 * assist, up.z * -ctl.steer * Iy * 2.2 * assist);
-        const push = m * 4.2 * throttle * assist * Math.min(1, Math.abs(beta) * 2);
+      // velocity heading rate (how fast the travel direction is turning)
+      const velYaw = Math.atan2(this.vel.x, this.vel.z);
+      let dVel = velYaw - this.prevVelYaw;
+      if (dVel > Math.PI) dVel -= Math.PI * 2;
+      else if (dVel < -Math.PI) dVel += Math.PI * 2;
+      this.prevVelYaw = velYaw;
+      if (this.driftMode && horiz > 6) {
+        // --- arcade drift controller: steering sets the slip angle, a PD yaw controller holds it ---
+        const D = this.driftDir;
+        const u = clamp(ctl.steer * D, -1, 1); // +1 = steering into the turn
+        let bt = 0.44 + 0.3 * u;
+        if (throttle < 0.2) bt *= 0.6; // lift to tighten up
+        if (this.handbrake) bt = Math.max(bt, 0.7);
+        bt = clamp(bt, 0.08, 0.85) * clamp(spec.slide + 0.25, 0.7, 1.1);
+        this.driftTarget = D * bt;
+        const err = beta - this.driftTarget; // beta = velocity heading - car heading
+        const wDes = dVel / dt + err * 4.2 * assist;
+        const k2 = (wDes - yawRate) * Iy * 9;
+        torque(up.x * k2, up.y * k2, up.z * k2);
+        // throttle keeps the slide flowing (counteracts the scrub of sideways tyres)
+        const push = m * 2.6 * throttle * assist * Math.min(1, Math.abs(beta) * 2.5);
         const vdir = _v.copy(this.vel).normalize();
         body.applyImpulse({ x: vdir.x * push * dt, y: 0, z: vdir.z * push * dt }, true);
-        // anti-spin: past ~65° pull the nose back toward the velocity unless handbraking
-        if (Math.abs(beta) > 1.1 && !this.handbrake) {
-          const k2 = (Math.abs(beta) - 1.1) * Iy * 10 * Math.sign(beta);
-          torque(up.x * k2, up.y * k2, up.z * k2);
-        }
-      } else if (Math.abs(ctl.steer) < 0.05 && sp > 4) {
-        // straight-line stability
-        const k2 = -yawRate * Iy * spec.stability * 3.5;
-        torque(up.x * k2, up.y * k2, up.z * k2);
+        // and bend the travel direction into the corner a little (drifts go *around* corners)
+        const turn = m * (1.0 + 7.5 * Math.max(0, u)) * Math.min(1, this.speedAbs / 15);
+        const sideX = -vdir.z * D, sideZ = vdir.x * D; // toward the inside of the drift
+        body.applyImpulse({ x: sideX * turn * dt, y: 0, z: sideZ * turn * dt }, true);
       }
       // handbrake initiates rotation
       if (this.handbrake && sp > 6) {

@@ -227,12 +227,13 @@ export class SetPieces {
     switch (sp.kind) {
       case 'ramp': {
         const L = 16 + sp.param * 6;
-        const W = 7;
+        const W = Math.min(7, sp.halfW * 0.95);
         const H = 3 + sp.param * 1.6;
-        addMesh(kicker(L, W, H, 14), this.mats.ramp, true);
+        const lane = -sp.halfW * 0.5; // right-hand lane (local -x is right of travel)
+        addMesh(kicker(L, W, H, 14, 0.5).translate(lane, 0, 0), this.mats.ramp, true);
         // floodlights on the lip
-        addBox(W / 2 + 0.3, H + 0.4, L / 2, 0.15, 0.4, 0.15, this.mats.neonCyan, false);
-        addBox(-W / 2 - 0.3, H + 0.4, L / 2, 0.15, 0.4, 0.15, this.mats.neonCyan, false);
+        addBox(lane + W / 2 + 0.3, H + 0.4, L / 2, 0.15, 0.4, 0.15, this.mats.neonCyan, false);
+        addBox(lane - W / 2 - 0.3, H + 0.4, L / 2, 0.15, 0.4, 0.15, this.mats.neonCyan, false);
         break;
       }
       case 'loop': {
@@ -284,7 +285,7 @@ export class SetPieces {
       }
       case 'construction': {
         const lane = side * sp.halfW * 0.5;
-        addMesh(kicker(7, 3.2, 1.5, 6).translate(lane, 0, 14), this.mats.wood, true);
+        addMesh(kicker(7, 3.2, 1.5, 6, 0.6).translate(lane, 0, 14), this.mats.wood, true);
         // crane-ish tower off road
         const off = side * 18;
         addBox(off, 9, 0, 0.6, 9, 0.6, this.mats.ramp, true);
@@ -300,42 +301,43 @@ export class SetPieces {
   }
 }
 
-/** A curved kicker ramp along +z, base at y=0, lip at z=+L/2. */
-function kicker(L: number, W: number, H: number, segs: number): THREE.BufferGeometry {
+/** A curved kicker ramp along +z, base at y=0, lip at z=+L/2. With backSlope, the back is a
+ *  drivable slope (a launch from that side too) instead of a wall. */
+function kicker(L: number, W: number, H: number, segs: number, backSlope = 0): THREE.BufferGeometry {
   const pos: number[] = [];
   const idx: number[] = [];
   const prof = (t: number) => H * Math.pow(t, 1.7) - 0.12 * (1 - t) * (1 - t);
-  // top surface
+  const back = backSlope > 0 ? H / Math.tan(backSlope) : 0;
+  // profile points (z, y)
+  const P: [number, number][] = [];
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
-    const z = -L / 2 + L * t;
-    const y = prof(t);
-    pos.push(-W / 2, y, z, W / 2, y, z);
+    P.push([-L / 2 + L * t, prof(t)]);
   }
-  for (let i = 0; i < segs; i++) {
+  if (back > 0) {
+    P.push([L / 2 + 0.6, H]); // short flat table
+    P.push([L / 2 + 0.6 + back, -0.12]);
+  }
+  for (const [z, y] of P) pos.push(-W / 2, y, z, W / 2, y, z);
+  for (let i = 0; i < P.length - 1; i++) {
     const a = i * 2;
     idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
   }
   // sides
-  const base = pos.length / 3;
   for (const sx of [-W / 2, W / 2]) {
     const sb = pos.length / 3;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const z = -L / 2 + L * t;
-      pos.push(sx, prof(t), z, sx, 0, z);
-    }
-    for (let i = 0; i < segs; i++) {
+    for (const [z, y] of P) pos.push(sx, y, z, sx, -0.1, z);
+    for (let i = 0; i < P.length - 1; i++) {
       const a = sb + i * 2;
       if (sx > 0) idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
       else idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
     }
   }
-  void base;
-  // back face
-  const bb = pos.length / 3;
-  pos.push(-W / 2, 0, L / 2, W / 2, 0, L / 2, W / 2, H, L / 2, -W / 2, H, L / 2);
-  idx.push(bb, bb + 2, bb + 1, bb, bb + 3, bb + 2);
+  if (back <= 0) {
+    const bb = pos.length / 3;
+    pos.push(-W / 2, 0, L / 2, W / 2, 0, L / 2, W / 2, H, L / 2, -W / 2, H, L / 2);
+    idx.push(bb, bb + 2, bb + 1, bb, bb + 3, bb + 2);
+  }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx);

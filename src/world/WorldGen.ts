@@ -319,6 +319,14 @@ export class WorldGen {
       }
     }
     pts.push(B[0], B[1]);
+    // straight stubs at both junctions so edges fan out cleanly from a node (no overlapping ribbons)
+    {
+      const stub = Math.min(30, L * 0.12);
+      const ux = dx / L;
+      const uz = dz / L;
+      pts.splice(2, 0, A[0] + ux * stub, A[1] + uz * stub);
+      pts.splice(pts.length - 2, 0, B[0] - ux * stub, B[1] - uz * stub);
+    }
 
     // --- dense centripetal Catmull-Rom sampling ---
     const dense: number[] = [];
@@ -561,10 +569,17 @@ export class WorldGen {
     if (type !== RoadType.Avenue) {
       const count = type === RoadType.Mountain ? rng.int(0, 1) : rng.int(1, 2);
       for (let c = 0; c < count; c++) {
-        const q0 = Math.floor(n * rng.range(0.2, 0.8));
-        let clash = false;
-        for (let o = -25; o <= 25; o++) if (flags[clamp(q0 + o, 0, n - 1)] & RoadFlag.Stunt) clash = true;
-        if (clash) continue;
+        let q0 = -1;
+        for (let tries = 0; tries < 5 && q0 < 0; tries++) {
+          const cand = Math.floor(n * rng.range(0.2, 0.8));
+          let clash = false;
+          for (let o = -30; o <= 30; o++) {
+            const a = clamp(cand + o, 0, n - 1);
+            if (flags[a] & (RoadFlag.Stunt | RoadFlag.Crest) || Math.abs(raw[a] - H[a]) > 5) clash = true; // no jumps into cuts / off bridges
+          }
+          if (!clash) q0 = cand;
+        }
+        if (q0 < 0) continue;
         const A2 = rng.range(2.2, 4.0) * this.t.crestHeight;
         const Lc = rng.range(40, 60);
         const half = Lc / 2 / ds;
@@ -584,8 +599,14 @@ export class WorldGen {
     // --- bridges & tunnels ---
     for (let q = 0; q < n; q++) {
       const diff = H[q] - raw[q];
-      if (diff > 5.5) flags[q] |= RoadFlag.Bridge;
-      else if (diff < -10 && type !== RoadType.Avenue && q > 10 && q < n - 11) flags[q] |= RoadFlag.Tunnel;
+      if (diff > 7.5 && !(flags[q] & RoadFlag.Crest)) flags[q] |= RoadFlag.Bridge;
+      else if (diff < -10 && type !== RoadType.Avenue && q > 20 && q < n - 21) {
+        // only a tunnel if the hill rises on both sides (otherwise it's a cliff-side cut)
+        const off = halfW + 9;
+        const l = this.baseHeight(X[q] + TZ[q] * off, Z[q] - TX[q] * off);
+        const r = this.baseHeight(X[q] - TZ[q] * off, Z[q] + TX[q] * off);
+        if (l > H[q] + 7 && r > H[q] + 7) flags[q] |= RoadFlag.Tunnel;
+      }
     }
     // remove short runs
     for (const f of [RoadFlag.Bridge, RoadFlag.Tunnel]) {
@@ -1096,7 +1117,8 @@ export class WorldGen {
           for (let k = 0; k < 5; k++) at(r2.range(-14, 14), sp.side * (e.halfW + 4 + r2.range(0, 6)), Prop.Crate, r2.next() * 6, 1, sampleH(sp.x, sp.z));
           for (let k = 0; k < 3; k++) at(r2.range(-14, 14), sp.side * (e.halfW + 3 + r2.range(0, 5)), Prop.Barrel, r2.next() * 6, 1, sampleH(sp.x, sp.z));
         } else if (sp.kind === 'ramp') {
-          for (const s2 of [-1, 1]) for (let k = 0; k < 3; k++) at(-14 - k * 4, s2 * 4.2, Prop.Cone, 0);
+          // cones funnel into the ramp lane (right-hand lane)
+          for (const s2 of [0.05, 0.95]) for (let k = 0; k < 3; k++) at(-14 - k * 4, e.halfW * s2, Prop.Cone, 0);
         } else if (sp.kind === 'loop') {
           for (const s2 of [-1, 1]) for (let k = 0; k < 4; k++) at(-30 - k * 5, s2 * (e.halfW - 0.8), Prop.Cone, 0);
         }
@@ -1280,8 +1302,8 @@ export class WorldGen {
         const rx = -e.tz[q], rz = e.tx[q];
         for (let k = 0; k <= segs; k++) {
           const a = (k / segs) * Math.PI;
-          const lx = Math.cos(a) * (r + 1.5);
-          const ly = Math.sin(a) * ((r + 1.5) * 0.75);
+          const lx = Math.cos(a) * (r + 3.5);
+          const ly = Math.sin(a) * ((r + 3.5) * 0.85);
           struct.vert(e.x[q] + rx * lx, e.h[q] + ly - 0.5, e.z[q] + rz * lx, rx * Math.cos(a), Math.sin(a), rz * Math.cos(a));
         }
       }
