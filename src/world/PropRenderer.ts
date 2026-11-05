@@ -150,14 +150,14 @@ export class PropRenderer {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
       vertexShader: /* glsl */ `
-        varying float vH; varying vec3 vN; varying vec3 vV;
+        varying float vH; varying vec3 vN; varying vec3 vV; varying float vD;
         void main(){ vH = position.y / 7.6; vec4 wp = modelMatrix * instanceMatrix * vec4(position,1.0);
-          vN = normalize(mat3(modelMatrix * instanceMatrix) * normal); vV = normalize(cameraPosition - wp.xyz);
+          vN = normalize(mat3(modelMatrix * instanceMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); vD = distance(cameraPosition, wp.xyz);
           gl_Position = projectionMatrix * viewMatrix * wp; }`,
       fragmentShader: /* glsl */ `
-        uniform float uNight; varying float vH; varying vec3 vN; varying vec3 vV;
+        uniform float uNight; varying float vH; varying vec3 vN; varying vec3 vV; varying float vD;
         void main(){ float edge = pow(1.0 - abs(dot(vN, vV)), 1.5);
-          float a = (1.0 - edge) * mix(0.01, 0.07, vH) * uNight;
+          float a = (1.0 - edge) * mix(0.01, 0.07, vH) * uNight * smoothstep(5.0, 16.0, vD);
           gl_FragColor = vec4(vec3(1.0,0.8,0.55)*a, 1.0); }`,
     });
     this.pools = this.makeSlotRaw(this.poolGeo, this.poolMat, 64, false);

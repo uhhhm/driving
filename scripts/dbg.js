@@ -1,0 +1,1 @@
+(() => { const menus = [...document.querySelectorAll('.menu')].map(m => m.className); return JSON.stringify({ menus, hash: location.hash, paused: window.game.paused, started: window.game.started }); })()

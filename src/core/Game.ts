@@ -77,6 +77,8 @@ export class Game {
   simTime = 0;
   paused = false;
   controls: Controls | null = null;
+  prof: Record<string, number> = {};
+  profMax: Record<string, number> = {};
   stats = { fps: 60, frameMs: 0, physMs: 0, renderMs: 0 };
   private fpsAcc = 0;
   private fpsFrames = 0;
@@ -175,7 +177,8 @@ export class Game {
   setQuality(q: number) {
     this.quality = q;
     const dpr = window.devicePixelRatio || 1;
-    this.renderer.setPixelRatio(q === 0 ? Math.min(dpr, 0.75) : q === 1 ? Math.min(dpr, 1) : Math.min(dpr, 1.5));
+    this.basePixelRatio = q === 0 ? Math.min(dpr, 0.75) : q === 1 ? Math.min(dpr, 1) : Math.min(dpr, 1.5);
+    this.renderer.setPixelRatio(this.basePixelRatio * this.resScale);
     this.renderer.shadowMap.enabled = q > 0;
     this.sky.sun.castShadow = q > 0;
     this.sky.sun.shadow.mapSize.set(q === 2 ? 2048 : 1024, q === 2 ? 2048 : 1024);
@@ -292,6 +295,7 @@ export class Game {
       this.stats.fps = this.fpsFrames / this.fpsAcc;
       this.fpsAcc = 0;
       this.fpsFrames = 0;
+      this.adaptResolution();
     }
     if (this.slowMoTimer > 0) {
       this.slowMoTimer -= realDt;
@@ -334,7 +338,15 @@ export class Game {
     m.root.quaternion.slerpQuaternions(this.player.prevQuat, v.quat, alpha);
     this.updateWheels();
 
+    let tq = performance.now();
+    const mark = (k: string) => {
+      const n = performance.now();
+      this.prof[k] = (this.prof[k] ?? 0) * 0.95 + (n - tq) * 0.05;
+      this.profMax[k] = Math.max(this.profMax[k] ?? 0, n - tq);
+      tq = n;
+    };
     this.chunks.update(v.pos.x, v.pos.z, v.vel.x, v.vel.z);
+    mark('chunks');
     this.simTime += dt;
     worldUniforms.uTime.value = this.simTime;
     this.updateBiome(realDt);
@@ -342,27 +354,36 @@ export class Game {
     const night = this.sky.state.night;
     this.chunks.props.setNight(night);
     this.water.update(this.simTime, v.pos, this.sky.state.fogColor, this.sky.state.sunDir, night);
+    mark('sky');
     if (dt > 0) {
       this.weather.update(dt);
+      mark('weather');
       this.traffic.update(dt);
+      mark('traffic');
       this.police.update(dt);
       this.score.update(dt);
       this.events.update(dt);
       this.ghost.update(dt);
+      mark('gameplay');
       this.vfx.update(dt, realDt);
+      mark('vfx');
       this.particles.update(dt);
+      mark('particles');
       this.impacts.update(dt);
       this.checkHazards(dt);
     }
     this.headlights.update(night, this.weather.fog, this.player.model, v);
     this.env.update(realDt);
+    mark('env');
 
     const camPos = this.rig.camera.position;
     const ground = this.chunks.heightAt(camPos.x, camPos.z);
     this.rig.lookBack = !!ctl.lookBack;
     if (this.photo.active) this.photo.update(realDt);
     else this.rig.update(dt, realDt, v, v.boosting, Math.max(ground, this.water.level + 0.3));
+    mark('camera');
     this.hud.update(realDt);
+    mark('hud');
     this.postfx.update(realDt, {
       speed: this.rig.speedFx * (this.photo.active ? 0 : 1),
       biome: this.biomeWeights,
@@ -378,6 +399,39 @@ export class Game {
     this.stats.frameMs = performance.now() - now;
   }
   private hornHeld = false;
+  /** Dynamic resolution: trade pixels for frame rate on weaker GPUs. */
+  autoRes = true;
+  resScale = 1;
+  private lowFps = 0;
+  private highFps = 0;
+  private adaptResolution() {
+    if (!this.autoRes || !this.started || document.hidden) return;
+    const fps = this.stats.fps;
+    if (fps < 52) {
+      this.lowFps++;
+      this.highFps = 0;
+    } else if (fps > 59) {
+      this.highFps++;
+      this.lowFps = 0;
+    } else {
+      this.lowFps = this.highFps = 0;
+    }
+    let changed = false;
+    if (this.lowFps >= 3 && this.resScale > 0.55) {
+      this.resScale = Math.max(0.55, this.resScale - 0.1);
+      this.lowFps = 0;
+      changed = true;
+    } else if (this.highFps >= 8 && this.resScale < 1) {
+      this.resScale = Math.min(1, this.resScale + 0.05);
+      this.highFps = 0;
+      changed = true;
+    }
+    if (changed) {
+      this.renderer.setPixelRatio(this.basePixelRatio * this.resScale);
+      this.onResize();
+    }
+  }
+  private basePixelRatio = 1;
 
   private checkHazards(dt: number) {
     const v = this.player.vehicle;

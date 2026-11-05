@@ -34,8 +34,8 @@ export class Sky {
   cityAmount = 0;
   weatherDark = 0; // 0..1 overcast
   weatherFog = 0; // 0..1 extra fog
-  fogNear = 120;
-  fogFar = 820;
+  fogNear = 170;
+  fogFar = 880;
 
   constructor(scene: THREE.Scene) {
     const geo = new THREE.SphereGeometry(2500, 32, 16);
@@ -131,8 +131,8 @@ export class Sky {
 
     // palette
     const golden = smoothstep(0.35, 0.02, Math.abs(elev)) * (1 - sunNight * 0.7);
-    const dayZen = C(0.16, 0.38, 0.85);
-    const dayHor = C(0.62, 0.78, 0.95);
+    const dayZen = C(0.1, 0.3, 0.8);
+    const dayHor = C(0.55, 0.7, 0.9);
     const goldZen = C(0.22, 0.25, 0.55);
     const goldHor = C(1.0, 0.52, 0.28);
     const nightZen = C(0.004, 0.008, 0.03);
@@ -165,14 +165,14 @@ export class Sky {
     const sunCol = C(1, 0.62, 0.38).lerp(C(1, 0.96, 0.9), clamp(sunUp * 3, 0, 1));
     const moonCol = C(0.45, 0.55, 0.85);
     const lightCol = sunCol.lerp(moonCol, moon);
-    const intensity = lerp(0.1 + smoothstep(0, 0.25, sunUp) * 3.0, 0.35, moon) * (1 - this.weatherDark * 0.6) * (1 - this.cityAmount * 0.75);
+    const intensity = lerp(0.1 + smoothstep(0, 0.25, sunUp) * 2.5, 0.35, moon) * (1 - this.weatherDark * 0.6) * (1 - this.cityAmount * 0.75);
     this.sun.color.copy(lightCol);
     this.sun.intensity = intensity;
     this.sun.position.copy(focus).addScaledVector(lightDir, 200);
     this.sun.target.position.copy(focus);
     this.hemi.color.copy(zen).lerp(C(1, 1, 1), 0.35);
     this.hemi.groundColor.copy(hor).multiplyScalar(0.4);
-    this.hemi.intensity = lerp(1.15, 0.25, night) * (1 - this.weatherDark * 0.25);
+    this.hemi.intensity = lerp(0.85, 0.25, night) * (1 - this.weatherDark * 0.25);
     // snap shadow camera to texel grid to avoid shimmering
     this.mesh.position.copy(focus);
   }

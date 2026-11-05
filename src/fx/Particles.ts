@@ -77,6 +77,7 @@ class Pool {
   emit(x: number, y: number, z: number, vx: number, vy: number, vz: number, r: number, g: number, b: number, a: number, size: number, life: number, grow = 0, drag = 0.5, grav = 0) {
     const i = this.head;
     this.head = (this.head + 1) % this.max;
+    this.emitted = true;
     this.pos[i * 3] = x;
     this.pos[i * 3 + 1] = y;
     this.pos[i * 3 + 2] = z;
@@ -95,7 +96,10 @@ class Pool {
     this.grav[i] = grav;
   }
 
+  private emitted = false;
   update(dt: number) {
+    if (this.alive === 0 && !this.emitted) return;
+    this.emitted = false;
     const c = this.aCol.array as Float32Array;
     const s = this.aSize.array as Float32Array;
     let alive = 0;

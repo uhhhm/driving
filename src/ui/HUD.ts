@@ -25,6 +25,7 @@ export class HUD {
   private debugEl: HTMLDivElement;
   minimap: Minimap;
   private lastMult = 1;
+  private frameN = 0;
   private lastPot = 0;
   showDebug = false;
   visible = true;
@@ -135,7 +136,7 @@ export class HUD {
     this.root.style.display = this.visible ? '' : 'none';
     if (!this.visible) return;
     const v = g.player.vehicle;
-    this.drawSpeedo(v.kmh, v.rpm / v.spec.redline, v.gear, v.boost / v.spec.boostCapacity, v.health / 100, v.boosting, v.limiter);
+    if (++this.frameN % 2 === 0) this.drawSpeedo(v.kmh, v.rpm / v.spec.redline, v.gear, v.boost / v.spec.boostCapacity, v.health / 100, v.boosting, v.limiter);
     // combo
     const s = g.score;
     if (s) {
