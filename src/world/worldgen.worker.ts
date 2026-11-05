@@ -15,7 +15,7 @@ interface Req {
 }
 
 function transferables(d: ChunkData): Transferable[] {
-  const t: Transferable[] = [d.heights.buffer, d.normals.buffer, d.colors.buffer, d.props.buffer, d.tunnelLights.buffer];
+  const t: Transferable[] = [d.heights.buffer, d.normals.buffer, d.colors.buffer, d.detail.buffer, d.props.buffer, d.tunnelLights.buffer];
   if (d.surface) t.push(d.surface.buffer);
   for (const m of [d.road, d.structure, d.rock, d.roadCollider]) {
     if (!m) continue;

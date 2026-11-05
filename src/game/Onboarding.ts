@@ -40,7 +40,7 @@ export class Onboarding {
   ) {
     this.el = document.createElement('div');
     this.el.className = 'hud-goal';
-    game.hud.root.appendChild(this.el);
+    game.hud.topLeft.prepend(this.el); // goal on top, event panel stacks below it
     bus.on('award', (e) => this.handle({ kind: 'award', name: e.name }));
     bus.on('bank', () => this.handle({ kind: 'bank' }));
     bus.on('comboLost', () => this.active && !this.advancing && this.render()); // keep the bank hint honest

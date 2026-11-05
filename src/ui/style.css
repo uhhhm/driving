@@ -55,7 +55,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 .hud-center.danger { color: #ff3b3b; }
 .hud-center.good { color: #7dff3d; }
 
-.hud-event { position: absolute; left: 22px; top: 16px; min-width: 260px; padding: 12px 16px; background: linear-gradient(90deg, rgba(10,10,20,.8), rgba(10,10,20,0)); border-left: 4px solid var(--cyan); transform: translateX(-120%); transition: transform .4s cubic-bezier(.2,1.2,.4,1); }
+.hud-tl { position: absolute; left: 22px; top: 16px; display: flex; flex-direction: column; align-items: flex-start; }
+/* hidden panels slide out AND collapse, so whatever is below moves up instead of leaving a gap */
+.hud-tl > div { box-sizing: border-box; overflow: hidden; max-height: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; }
+.hud-tl > div.show { max-height: 220px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 10px; }
+.hud-event { min-width: 260px; padding: 12px 16px; background: linear-gradient(90deg, rgba(10,10,20,.8), rgba(10,10,20,0)); border-left: 4px solid var(--cyan); transform: translateX(-120%); transition: transform .4s cubic-bezier(.2,1.2,.4,1), max-height .35s ease, padding .35s ease, margin .35s ease; }
 .hud-event.show { transform: none; }
 .hud-event h3 { margin: 0; font: 400 18px var(--display); color: var(--cyan); }
 .hud-event p { margin: 4px 0 0; font: 600 15px var(--font); }
@@ -65,7 +69,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 .hud-event.danger { border-color: #ff3b3b; }
 .hud-event.danger h3 { color: #ff3b3b; }
 
-.hud-goal { position: absolute; left: 22px; top: 16px; width: 300px; padding: 12px 16px; background: linear-gradient(90deg, rgba(10,10,20,.82), rgba(10,10,20,0)); border-left: 4px solid #ffd23f; transform: translateX(-120%); transition: transform .4s cubic-bezier(.2,1.2,.4,1), border-color .2s; }
+.hud-goal { width: 300px; padding: 12px 16px; background: linear-gradient(90deg, rgba(10,10,20,.82), rgba(10,10,20,0)); border-left: 4px solid #ffd23f; transform: translateX(-120%); transition: transform .4s cubic-bezier(.2,1.2,.4,1), border-color .2s, max-height .35s ease, padding .35s ease, margin .35s ease; }
 .hud-goal.show { transform: none; }
 .hud-goal.cleared { border-color: #7dff3d; }
 .hud-goal.cleared h3 { color: #7dff3d; }

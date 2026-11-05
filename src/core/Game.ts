@@ -211,6 +211,7 @@ export class Game {
     this.chunks.lod1Radius = q === 0 ? 2 : q === 1 ? 3 : 4;
     this.particles.quality = q === 0 ? 0.4 : q === 1 ? 0.75 : 1;
     this.traffic.maxCars = q === 0 ? 20 : q === 1 ? 28 : 34;
+    worldUniforms.uDetail.value = q === 0 ? 0 : 1;
     this.onResize();
   }
 

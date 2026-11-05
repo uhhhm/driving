@@ -312,6 +312,7 @@ export class ChunkManager {
     const pos = new Float32Array(nv * 3);
     const nor = new Float32Array(nv * 3);
     const col = new Float32Array(nv * 3);
+    const det = new Float32Array(nv * 4);
     for (let j = 0; j < R1; j++)
       for (let i = 0; i < R1; i++) {
         const v = j * R1 + i;
@@ -321,6 +322,7 @@ export class ChunkManager {
       }
     nor.set(d.normals);
     col.set(d.colors);
+    det.set(d.detail);
     for (let k2 = 0; k2 < per.length; k2++) {
       const v = per[k2];
       const s = R1 * R1 + k2;
@@ -333,11 +335,13 @@ export class ChunkManager {
       col[s * 3] = d.colors[v * 3];
       col[s * 3 + 1] = d.colors[v * 3 + 1];
       col[s * 3 + 2] = d.colors[v * 3 + 2];
+      for (let k = 0; k < 4; k++) det[s * 4 + k] = d.detail[v * 4 + k];
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    g.setAttribute('aDetail', new THREE.BufferAttribute(det, 4));
     g.setIndex(this.gridIndex(res));
     g.boundingSphere = new THREE.Sphere(
       new THREE.Vector3(CHUNK / 2, (d.minH + d.maxH) / 2, CHUNK / 2),

@@ -6,6 +6,7 @@ export const worldUniforms = {
   uWet: { value: 0 }, // 0..1 rain wetness
   uSnow: { value: 0 }, // 0..1 snow cover
   uNight: { value: 0 }, // 0..1
+  uDetail: { value: 1 }, // per-pixel terrain detail (0 on the Low preset)
 };
 
 const NOISE_GLSL = /* glsl */ `
@@ -24,22 +25,117 @@ function injectWorldPos(shader: THREE.WebGLProgramParametersWithUniforms) {
   // worldpos_vertex only computes worldPosition under some defines; make sure transformed exists.
 }
 
+/**
+ * Terrain: vertex colours carry the biome palette (2–8 m resolution). Everything finer is done
+ * per pixel here so the ground holds up close: grass clumps and dirt patches, wind-rippled sand,
+ * layered rock strata on steep faces (triplanar), gravel shoulders, concrete grime, plus a
+ * derivative-based bump so the detail catches the light. Fine detail fades out with distance
+ * (no shimmer) and is skipped entirely on the Low quality preset (uDetail = 0).
+ */
 export function makeTerrainMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.93, metalness: 0 });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, worldUniforms);
     injectWorldPos(shader);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 aDetail;\nvarying vec4 vDetail;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvDetail = aDetail;');
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNorm;\nuniform float uWet; uniform float uSnow; uniform float uTime;\n${NOISE_GLSL}`,
+        `#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNorm;\nvarying vec4 vDetail;\nuniform float uWet; uniform float uSnow; uniform float uTime; uniform float uDetail;\n${NOISE_GLSL}
+        // bump from screen-space derivatives of a scalar height (view space in, view space out)
+        vec2 rot2(vec2 p) { return mat2(0.8, -0.6, 0.6, 0.8) * p; }
+        vec3 terrainBump(vec3 pos, vec3 n, float h, float fd) {
+          vec3 sx = dFdx(pos), sy = dFdy(pos);
+          vec3 r1 = cross(sy, n), r2 = cross(n, sx);
+          float det = dot(sx, r1) * fd;
+          vec2 dh = vec2(dFdx(h), dFdy(h));
+          vec3 grad = sign(det) * (dh.x * r1 + dh.y * r2);
+          return normalize(abs(det) * n - grad);
+        }`,
       )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        float dn = vnoise(vWPos.xz*0.35)*0.5 + vnoise(vWPos.xz*1.7)*0.3 + vnoise(vWPos.xz*7.0)*0.2;
-        diffuseColor.rgb *= 0.82 + dn*0.36;
-        float up = clamp(vWNorm.y, 0.0, 1.0);
+        vec2 xz = vWPos.xz;
+        vec3 wn = normalize(vWNorm);
+        float up = clamp(wn.y, 0.0, 1.0);
+        float camD = length(vWPos - cameraPosition);
+        float fine = uDetail * (1.0 - smoothstep(45.0, 140.0, camD)); // close-up detail
+        float midD = uDetail * (1.0 - smoothstep(180.0, 520.0, camD)); // rock strata, patches
+        float wDes = vDetail.x, wAlp = vDetail.y, wCoa = vDetail.z, shoulder = vDetail.w;
+        float wCity = clamp(1.0 - wDes - wAlp - wCoa, 0.0, 1.0);
+        float rockM = smoothstep(0.86, 0.62, up); // steep faces (vertex colour is already rock there)
+        float flatM = 1.0 - rockM;
+        float beach = wCoa * smoothstep(4.5, 1.5, vWPos.y);
+        float grassW = clamp((wAlp + wCoa - beach) * flatM * (1.0 - shoulder), 0.0, 1.0);
+        float sandW = clamp((wDes + beach) * flatM * (1.0 - shoulder * 0.6), 0.0, 1.0);
+        float lum0 = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+        float snowy = wAlp * smoothstep(0.6, 0.8, lum0);
+        grassW *= 1.0 - snowy;
+
+        // large-scale patches: breaks up the flat look at every distance
+        float macro = vnoise(xz * 0.027) * 0.6 + vnoise(xz * 0.09 + 31.0) * 0.4;
+        float dn = vnoise(xz * 0.35) * 0.5 + vnoise(xz * 1.7) * 0.3 + vnoise(xz * 7.0) * 0.2;
+        diffuseColor.rgb *= 0.84 + dn * 0.32;
+        diffuseColor.rgb *= 0.9 + macro * 0.2;
+        // sun-dried grass in some patches, lush in others
+        float dry = smoothstep(0.5, 0.78, macro) * grassW;
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.45, 1.2, 0.62), dry * 0.55);
+
+        float bumpH = 0.0;
+        if (uDetail > 0.5) {
+          // grass: clumps + scattered bare dirt patches
+          float clump = vnoise(xz * 2.6) * 0.55 + vnoise(rot2(xz) * 9.0) * 0.45;
+          diffuseColor.rgb *= mix(1.0, 0.72 + clump * 0.5, grassW * fine);
+          float bare = smoothstep(0.66, 0.8, vnoise(xz * 0.16 + 17.0) + clump * 0.12) * grassW * midD;
+          vec3 dirt = vec3(0.26, 0.2, 0.13) * (0.8 + dn * 0.4);
+          diffuseColor.rgb = mix(diffuseColor.rgb, dirt, bare * 0.75);
+          bumpH += (clump * 0.06) * grassW * fine;
+
+          // sand: wind ripples whose direction wanders, plus darker scrub specks
+          float wv = vnoise(xz * 0.045) * 7.0;
+          float rp = sin(dot(xz, vec2(0.84, 0.54)) * 2.4 + wv + vnoise(xz * 0.5) * 2.5) * 0.5 + 0.5;
+          rp = rp * rp;
+          diffuseColor.rgb *= mix(1.0, 0.9 + rp * 0.17, sandW * fine);
+          float speck = smoothstep(0.8, 0.9, vnoise(xz * 1.3 + 9.0) * 0.7 + vnoise(xz * 5.0) * 0.3);
+          diffuseColor.rgb *= 1.0 - speck * 0.25 * sandW * fine;
+          bumpH += rp * 0.07 * sandW * fine;
+
+          // rock: wavy strata + broken faces, projected along the face (triplanar on x/z).
+          // Several rotated octaves so value-noise cells never line up into "bricks".
+          if (rockM > 0.01) {
+            vec3 an = abs(wn); an = an * an; an /= (an.x + an.y + an.z);
+            vec2 px = vec2(vWPos.z, vWPos.y), pz = vec2(vWPos.x, vWPos.y);
+            mat2 rot = mat2(0.8, -0.6, 0.6, 0.8);
+            float rkx = vnoise(px * vec2(0.45, 0.9)) * 0.45 + vnoise(rot * px * 1.9 + 3.0) * 0.35 + vnoise(rot * rot * px * 5.3) * 0.2;
+            float rkz = vnoise(pz * vec2(0.45, 0.9) + 11.0) * 0.45 + vnoise(rot * pz * 1.9 + 7.0) * 0.35 + vnoise(rot * rot * pz * 5.3) * 0.2;
+            float rky = vnoise(xz * 0.9) * 0.6 + vnoise(rot * xz * 3.1) * 0.4;
+            float rk = rkx * an.x + rkz * an.z + rky * an.y;
+            // canyon walls get bold layered strata; other biomes a gentler, cracked look
+            float strataK = mix(0.35, 1.0, wDes);
+            float ledge = fract(vWPos.y * 0.3 + rk * 1.1 + vnoise(xz * 0.07) * 2.0);
+            float lip = smoothstep(0.0, 0.18, ledge) * smoothstep(1.0, 0.7, ledge); // lighter ledge tops, dark undercuts
+            float strata = (0.72 + rk * 0.42) * mix(1.0, 0.8 + 0.28 * lip, strataK);
+            diffuseColor.rgb *= mix(1.0, strata, rockM * midD);
+            bumpH += (rk * 0.22 + lip * 0.18 * strataK) * rockM * midD;
+          }
+
+          // snow: soft wind-blown drifts
+          diffuseColor.rgb *= mix(1.0, 0.93 + vnoise(xz * 0.6) * 0.1, snowy * fine);
+          bumpH += vnoise(xz * 0.6) * 0.12 * snowy * fine;
+
+          // road shoulders: gravel
+          float grav = vnoise(xz * 6.0) * 0.55 + vnoise(rot2(xz) * 17.0) * 0.45;
+          diffuseColor.rgb *= mix(1.0, 0.84 + grav * 0.3, shoulder * fine * 0.85);
+          bumpH += grav * 0.02 * shoulder * fine;
+
+          // city lots: concrete grime + stains
+          float grime = vnoise(xz * 3.0) * 0.5 + vnoise(xz * 0.4) * 0.5;
+          diffuseColor.rgb *= mix(1.0, 0.82 + grime * 0.3, wCity * flatM * fine);
+        }
+
         float snowAmt = smoothstep(0.55, 0.85, up) * smoothstep(0.2, 0.6, uSnow + dn*0.3 - 0.15);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92,0.94,1.0), snowAmt);
         diffuseColor.rgb *= 1.0 - uWet*0.35*(1.0-snowAmt);
@@ -48,6 +144,10 @@ export function makeTerrainMaterial(): THREE.MeshStandardMaterial {
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.45, uWet*(1.0-snowAmt));`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>\nif (uDetail > 0.5) normal = terrainBump(-vViewPosition, normal, bumpH * (1.0 - snowAmt * 0.7), faceDirection);`,
       );
   };
   return m;
