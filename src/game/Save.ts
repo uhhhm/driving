@@ -27,6 +27,8 @@ export interface SaveData {
   bestBySeed: Record<string, number>;
   settings: { volume: number; quality: number; assists: number; invertAir: boolean; crashCam: boolean; music: boolean };
   seen: { intro: boolean };
+  /** Road School progress (goal index; ROAD_SCHOOL_DONE when finished) */
+  tutorial: number;
 }
 
 const KEY = 'seedrunner.save.v1';
@@ -42,6 +44,7 @@ const DEFAULT: SaveData = {
   bestBySeed: {},
   settings: { volume: 0.8, quality: 1, assists: 1, invertAir: false, crashCam: true, music: true },
   seen: { intro: false },
+  tutorial: 0,
 };
 
 export class Save {
@@ -54,6 +57,8 @@ export class Save {
       d = {};
     }
     this.data = { ...structuredClone(DEFAULT), ...d, settings: { ...DEFAULT.settings, ...(d.settings ?? {}) }, seen: { ...DEFAULT.seen, ...(d.seen ?? {}) } };
+    // saves from before Road School: anyone who has already earned credits skips it
+    if (d.tutorial === undefined && (d.lifetime ?? 0) > 0) this.data.tutorial = 99;
   }
   write() {
     try {

@@ -65,6 +65,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 .hud-event.danger { border-color: #ff3b3b; }
 .hud-event.danger h3 { color: #ff3b3b; }
 
+.hud-goal { position: absolute; left: 22px; top: 16px; width: 300px; padding: 12px 16px; background: linear-gradient(90deg, rgba(10,10,20,.82), rgba(10,10,20,0)); border-left: 4px solid #ffd23f; transform: translateX(-120%); transition: transform .4s cubic-bezier(.2,1.2,.4,1), border-color .2s; }
+.hud-goal.show { transform: none; }
+.hud-goal.cleared { border-color: #7dff3d; }
+.hud-goal.cleared h3 { color: #7dff3d; }
+.hud-goal small { font: 700 11px var(--font); letter-spacing: .22em; opacity: .7; }
+.hud-goal h3 { margin: 2px 0 4px; font: 400 26px var(--display); color: #ffd23f; transition: color .2s; }
+.hud-goal p { margin: 0 0 6px; font: 600 14px var(--font); letter-spacing: .03em; line-height: 1.35; }
+.hud-goal kbd { display: inline-block; padding: 0 6px; border: 1px solid rgba(255,255,255,.55); border-radius: 4px; font: 700 12px var(--font); }
+.hud-goal em { font: 700 13px var(--font); font-style: normal; color: #ffd23f; letter-spacing: .08em; }
 .hud-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); font: 600 14px var(--font); letter-spacing: .06em; padding: 8px 14px; background: rgba(0,0,0,.45); border-radius: 6px; opacity: 0; transition: opacity .5s; text-align: center; }
 .hud-hint.show { opacity: 1; }
 .hud-hint kbd { display: inline-block; padding: 1px 6px; margin: 0 2px; border: 1px solid rgba(255,255,255,.5); border-radius: 4px; font: 700 12px var(--font); }
@@ -105,6 +114,23 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 .controls { font: 500 13px var(--font); opacity: .85; line-height: 1.7; columns: 2; }
 .controls kbd { display: inline-block; min-width: 18px; text-align: center; padding: 0 5px; border: 1px solid rgba(255,255,255,.45); border-radius: 4px; font: 700 11px var(--font); }
 .credits { font: 700 22px var(--font); color: #ffd23f; }
+.menu .panel.garage { grid-template-columns: 1.25fr 1fr; }
+.keys { margin-top: 18px; font: 500 13px var(--font); opacity: .85; line-height: 1.9; }
+.keys kbd, .controls kbd { display: inline-block; min-width: 18px; text-align: center; padding: 0 5px; border: 1px solid rgba(255,255,255,.45); border-radius: 4px; font: 700 11px var(--font); }
+.all-controls { margin-top: 10px; }
+.all-controls summary { pointer-events: auto; cursor: pointer; font: 700 12px var(--font); letter-spacing: .2em; opacity: .7; list-style: none; }
+.all-controls summary::before { content: '▸ '; }
+.all-controls[open] summary::before { content: '▾ '; }
+.all-controls .controls { margin-top: 8px; }
+.car-card { align-self: center; padding: 22px 24px; border-radius: 12px; border: 2px solid rgba(255,255,255,.14); background: rgba(10,10,20,.45); }
+.car-card .car-name { font: 400 34px var(--display); margin-top: 12px; }
+.car-card .tagline { font: 500 14px var(--font); opacity: .8; margin: 4px 0 10px; }
+.unlock { margin-top: 18px; display: grid; gap: 6px; font: 600 12px var(--font); letter-spacing: .1em; }
+.unlock b { color: #ffd23f; }
+.unlock .bar { height: 7px; background: rgba(255,255,255,.12); border-radius: 4px; overflow: hidden; }
+.unlock .bar i { display: block; height: 100%; background: #ffd23f; }
+.garage-btn { margin-top: 18px; width: 100%; position: relative; }
+.garage-btn .dot { position: absolute; right: 12px; top: 50%; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%; background: #ffd23f; box-shadow: 0 0 10px #ffd23f; }
 .best { font: 600 13px var(--font); opacity: .8; letter-spacing: .1em; }
 .pause-title { font: 400 64px var(--display); text-align: center; }
 .pause-box { display: flex; flex-direction: column; gap: 10px; align-items: stretch; width: 340px; }
@@ -117,7 +143,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 .flash.on { opacity: 1; transition: none; }
 .lil-gui.root { z-index: 50; }
 @media (max-width: 800px) {
-  .menu .panel { grid-template-columns: 1fr; }
+  .menu .panel, .menu .panel.garage { grid-template-columns: 1fr; }
   .hud-speedo { width: 170px; height: 170px; }
   .hud-minimap { width: 130px; height: 130px; }
   .hud-center { font-size: 40px; }

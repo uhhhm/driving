@@ -6,6 +6,8 @@ export interface GameEvents {
   explode: { x: number; y: number; z: number; power: number };
   nearMiss: { dist: number; speed: number };
   trick: { name: string; points: number; color?: string };
+  /** every scored trick, after the multiplier has been bumped */
+  award: { name: string; points: number };
   land: { airTime: number; impact: number; clean: boolean };
   takeoff: Record<string, never>;
   shift: { gear: number; up: boolean };

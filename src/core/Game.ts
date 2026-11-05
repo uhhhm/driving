@@ -88,6 +88,8 @@ export class Game {
   private fpsAcc = 0;
   private fpsFrames = 0;
   weatherGrip = 1;
+  /** hold back procedural events (Road School is teaching the basics) */
+  quietEvents = false;
   weatherWet = 0;
   iceRoads = 0;
   sirenLevel = 0;

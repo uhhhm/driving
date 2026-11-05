@@ -73,6 +73,7 @@ export class Score {
       audio.ping(this.mult);
     }
     this.label = name;
+    bus.emit('award', { name, points: pts });
     this.game.player.vehicle.boost = Math.min(this.game.player.vehicle.spec.boostCapacity, this.game.player.vehicle.boost + pts / 2500);
     this.onTrick?.(name, pts, color);
   }

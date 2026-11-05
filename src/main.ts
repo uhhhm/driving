@@ -3,6 +3,7 @@ import { RAPIER } from './core/Physics';
 import { DebugPanel } from './core/Debug';
 import { TitleMenu, PauseMenu } from './ui/Menu';
 import { AutoPilot } from './game/AutoPilot';
+import { Onboarding } from './game/Onboarding';
 import { audio } from './audio/AudioEngine';
 import { radio } from './audio/Radio';
 import { carById } from './vehicle/VehicleDefs';
@@ -29,6 +30,7 @@ async function boot() {
   new DebugPanel(game);
 
   // attract mode: the menu sits over a live, self-driving world
+  const onboarding = new Onboarding(game, save);
   const pilot = new AutoPilot(game);
   pilot.active = true;
   game.rig.mode = 'cinematic';
@@ -48,7 +50,7 @@ async function boot() {
   const quickstart = params.has('play');
 
   const drive = async (first: boolean) => {
-    const r = quickstart && first ? { seed, car: carId, paint: save.data.paints[carId] ?? 0 } : await title.open();
+    const r = quickstart && first ? { seed, car: carId, paint: save.data.paints[carId] ?? 0 } : await title.open(first ? 'play' : 'garage');
     title.el.classList.add('hidden');
     audio.start();
     radio.start();
@@ -73,6 +75,7 @@ async function boot() {
     game.score.total = 0;
     game.ghost.restart();
     game.input.enabled = true;
+    onboarding.begin();
     if (!save.data.seen.intro) {
       game.hud.setHint('<kbd>W</kbd> gas · <kbd>A</kbd><kbd>D</kbd> steer · <kbd>SPACE</kbd> drift · <kbd>SHIFT</kbd> boost · <kbd>R</kbd> reset · <kbd>C</kbd> camera · <kbd>P</kbd> pause', 12);
       save.data.seen.intro = true;
@@ -118,6 +121,7 @@ async function boot() {
         break;
       case 'garage':
         pause.close();
+        onboarding.suspend();
         endRun();
         pilot.active = true;
         game.paused = false;
