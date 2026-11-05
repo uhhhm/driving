@@ -32,6 +32,14 @@ export class CameraRig {
   private cinePos = new THREE.Vector3();
   lookBack = false;
   speedFx = 0; // 0..1 for post fx
+  groundAt: (x: number, z: number) => number = () => -1e9;
+  /** returns distance along from→to to the first world hit, or null */
+  occlusion: (from: THREE.Vector3, to: THREE.Vector3) => number | null = () => null;
+  private unblock(target: THREE.Vector3, cam: THREE.Vector3) {
+    const d = cam.distanceTo(target);
+    const hit = this.occlusion(target, cam);
+    if (hit !== null && hit < d) cam.lerpVectors(target, cam, Math.max(0.15, (hit - 0.4) / d));
+  }
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(68, aspect, 0.1, 3000);
@@ -108,7 +116,8 @@ export class CameraRig {
       off.applyAxisAngle(new THREE.Vector3(0, 1, 0), orbitAng * realDt * 1.5);
       c.pos.copy(c.target).add(off);
       cam.position.copy(c.pos);
-      cam.position.y = Math.max(cam.position.y, groundY + 1);
+      cam.position.y = Math.max(cam.position.y, this.groundAt(cam.position.x, cam.position.z) + 1.2, groundY);
+      this.unblock(_t.copy(c.target).setY(c.target.y + 1), cam.position);
       cam.lookAt(c.target);
       cam.fov = lerp(55, 40, Math.min(1, k * 2));
       cam.updateProjectionMatrix();
@@ -164,7 +173,7 @@ export class CameraRig {
         ahead.normalize().multiplyScalar(30 + speed * 0.8);
         const side = _v2.set(-ahead.z, 0, ahead.x).normalize().multiplyScalar((this.cineIdx++ % 2 ? 1 : -1) * (8 + Math.random() * 6));
         this.cinePos.copy(v.pos).add(ahead).add(side);
-        this.cinePos.y = groundY + 1.5 + Math.random() * 4;
+        this.cinePos.y = Math.max(this.groundAt(this.cinePos.x, this.cinePos.z), groundY) + 1.5 + Math.random() * 4;
         this.cineTimer = 4.5;
       }
       cam.position.copy(this.cinePos);
@@ -187,8 +196,9 @@ export class CameraRig {
         this.pos.x = v.pos.x + off.x;
         this.pos.z = v.pos.z + off.z;
       }
-      this.pos.y = Math.max(this.pos.y, groundY + 0.8);
+      this.pos.y = Math.max(this.pos.y, this.groundAt(this.pos.x, this.pos.z) + 0.8, groundY);
       cam.position.copy(this.pos);
+      this.unblock(_t.copy(v.pos).setY(v.pos.y + 1.2), cam.position);
       this.look.copy(v.pos).addScaledVector(this.heading, 4 * hd);
       this.look.y += 1.1 * sizeK;
       cam.lookAt(this.look);

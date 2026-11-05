@@ -110,7 +110,7 @@ export class Police {
       const q = near.idx;
       pos = new THREE.Vector3(e.x[q], e.h[q] + 1.2, e.z[q]);
       yaw = Math.atan2(pv.pos.x - pos.x, pv.pos.z - pos.z);
-      if (!g.chunks.ready(pos.x, pos.z)) g.chunks.ensureSync(pos.x, pos.z);
+      if (!g.chunks.chunkAt(pos.x, pos.z)) return; // try again later (cop stays frozen until its chunk has physics)
     }
     const spec = { ...COP_SPEC, torque: COP_SPEC.torque * (1 + this.heat * 0.08) };
     const v = new Vehicle(g.physics, spec, pos, yaw);
@@ -245,7 +245,6 @@ export class Police {
         const lat = e.halfW + 3;
         const pos = new THREE.Vector3(e.x[q] - e.tz[q] * lat, e.h[q] + 1, e.z[q] + e.tx[q] * lat);
         if (g.chunks.chunkAt(pos.x, pos.z)) {
-          if (!g.chunks.ready(pos.x, pos.z)) g.chunks.ensureSync(pos.x, pos.z);
           this.spawnCop(false, { pos, yaw: Math.atan2(e.tx[q], e.tz[q]) + Math.PI / 2 });
         }
       }

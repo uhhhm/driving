@@ -86,6 +86,10 @@ rolls. Land on your wheels to bank the trick.
   boost, armour — 3 levels each). Best score per seed is tracked.
 * **Ghosts:** your best run on each seed is recorded and replays as a ghost car next time
   (*Pause → End run* saves it; it also saves when you leave).
+* **Little things:** persistent skid marks, headlights and street lamps that light up fog and
+  rain, flocks of birds that scatter when you blast past (or honk), far-off sirens across the
+  city at night, a sky that darkens as you enter the neon city, region names announced as you
+  cross biome borders, slow-mo on near misses and flips, letterboxed crash cam.
 * **Seed FM:** a procedural synthwave radio whose chord progression comes from the seed. Drums
   kick in with speed, an arpeggio lead with your combo, and it gets tense during police chases.
 
@@ -183,6 +187,13 @@ hand-shaped inertia. Each wheel is a ray along the body's down axis:
 * Fixed 120 Hz physics with render interpolation; ~1–2 ms/frame CPU for physics + gameplay.
 * **Dynamic resolution** drops the render scale when the frame rate dips below ~52 fps and
   restores it when there is headroom; three quality presets in the pause menu.
+
+### Camera
+
+The chase camera follows the *velocity* direction (blended with the car's heading), so drift
+angle is visible on screen. FOV opens with speed and punches on boost; trauma-based shake on
+impacts/landings; it never clips terrain or walls (height + raycast occlusion). The crash cam
+grabs a nearby angle, slows time to ~25% and letterboxes for a beat.
 
 ### Testing / tuning hooks
 

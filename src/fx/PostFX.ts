@@ -124,8 +124,8 @@ export class PostFX {
 
   constructor(
     private renderer: THREE.WebGLRenderer,
-    scene: THREE.Scene,
-    camera: THREE.Camera,
+    private scene: THREE.Scene,
+    private camera: THREE.Camera,
   ) {
     this.composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
     this.renderPass = new RenderPass(scene, camera);
@@ -190,7 +190,7 @@ export class PostFX {
 
   render(dt: number) {
     if (this.enabled) this.composer.render(dt);
-    else this.renderer.render((this.renderPass as unknown as { mainScene: THREE.Scene }).mainScene, (this.renderPass as unknown as { mainCamera: THREE.Camera }).mainCamera);
+    else this.renderer.render(this.scene, this.camera);
   }
 }
 

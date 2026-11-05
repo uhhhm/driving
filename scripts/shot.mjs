@@ -16,6 +16,6 @@ if (evalFile) {
   const res = await page.evaluate(code);
   if (res !== undefined) console.log('EVAL:', typeof res === 'string' ? res : JSON.stringify(res, null, 1));
 }
-await page.screenshot({ path: `${out}.png` });
+if (!process.env.NOSHOT) await page.screenshot({ path: `${out}.png` });
 console.log([...new Set(logs)].slice(0, 30).map(s=>s.slice(0,600)).join('\n'));
 await browser.close();

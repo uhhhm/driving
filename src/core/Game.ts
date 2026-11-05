@@ -1,6 +1,6 @@
 // Orchestrates all systems: fixed-step physics, streaming world, rendering, gameplay.
 import * as THREE from 'three';
-import { Physics } from './Physics';
+import { Physics, RAPIER, groups, G_CAR, G_WORLD } from './Physics';
 import { Input, type Controls } from './Input';
 import { bus } from './events';
 import { clamp, damp } from './rng';
@@ -138,6 +138,19 @@ export class Game {
     this.env = new EnvBaker(this.renderer, this.scene, this.sky.mesh);
     this.particles = new Particles(this.scene);
     this.particles.heightAt = (x, z) => this.chunks.heightAt(x, z);
+    this.rig.groundAt = (x, z) => Math.max(this.chunks.heightAt(x, z), this.water.level);
+    const camRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const camFilter = groups(G_CAR, G_WORLD);
+    this.rig.occlusion = (from, to) => {
+      const d = to.clone().sub(from);
+      const len = d.length();
+      if (len < 0.01) return null;
+      d.divideScalar(len);
+      camRay.origin = { x: from.x, y: from.y, z: from.z };
+      camRay.dir = { x: d.x, y: d.y, z: d.z };
+      const hit = this.physics.world.castRay(camRay, len, true, undefined, camFilter, undefined, this.player.vehicle.body);
+      return hit ? hit.timeOfImpact : null;
+    };
     this.skids = new SkidMarks(this.scene);
     this.hud = new HUD(this);
     this.vfx = new VehicleFX(this, this.particles, this.skids);
@@ -364,6 +377,7 @@ export class Game {
     this.updateBiome(realDt);
     if (!this.photo.active) this.sky.update(dt, v.pos);
     const night = this.sky.state.night;
+    this.scene.environmentIntensity = 1 - night * 0.65;
     this.chunks.props.setNight(night);
     this.water.update(this.simTime, v.pos, this.sky.state.fogColor, this.sky.state.sunDir, night);
     mark('sky');
@@ -394,7 +408,8 @@ export class Game {
     const ground = this.chunks.heightAt(camPos.x, camPos.z);
     this.rig.lookBack = !!ctl.lookBack;
     if (this.photo.active) this.photo.update(realDt);
-    else this.rig.update(dt, realDt, v, v.boosting, Math.max(ground, this.water.level + 0.3));
+    else this.rig.update(dt, realDt, v, v.boosting, this.water.level + 0.3);
+    void ground;
     mark('camera');
     this.hud.update(realDt);
     mark('hud');

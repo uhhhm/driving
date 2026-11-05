@@ -326,6 +326,8 @@ export class AudioEngine {
       const nature = (s.biome[1] + s.biome[3]) * (1 - s.night) * (1 - s.rain);
       if (Math.random() < nature * 0.8 && s.speed < 40) this.chirp(0.04 * nature);
       if (s.night > 0.6 && Math.random() < 0.5 * (1 - city)) this.cricket(0.02);
+      // the city never sleeps: far-off sirens
+      if (city > 0.5 && s.siren === 0 && Math.random() < 0.035) this.distantSiren();
     }
   }
 
@@ -487,6 +489,35 @@ export class AudioEngine {
 
   private cricket(v: number) {
     for (let i = 0; i < 4; i++) this.tone('square', 4200, 4100, 0.025, v, i * 0.05);
+  }
+
+  /** A faint wailing siren somewhere across town, with a slow doppler drift. */
+  distantSiren() {
+    const ctx = this.ctx!;
+    const t = ctx.currentTime;
+    const dur = 5 + Math.random() * 4;
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.55;
+    const lg = ctx.createGain();
+    lg.gain.value = 160;
+    lfo.connect(lg).connect(o.frequency);
+    const base = 620 + Math.random() * 80;
+    o.frequency.setValueAtTime(base * 1.04, t);
+    o.frequency.linearRampToValueAtTime(base * 0.95, t + dur);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 1100;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.018, t + dur * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f).connect(g).connect(this.sfx);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + dur + 0.1);
+    lfo.stop(t + dur + 0.1);
   }
 
   /** Big flock flap when birds scatter. */

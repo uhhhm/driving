@@ -37,6 +37,7 @@ export class Impacts {
   maxDebris = 40;
   crashCamEnabled = true;
   lastCrashT = -10;
+  private lastLaunch = -10;
 
   constructor(
     private game: Game,
@@ -243,12 +244,15 @@ export class Impacts {
     g.postfx?.flashColor(0.6 * power, 0.35 * power, 0.1 * power);
     const v = g.player.vehicle;
     const d = v.pos.distanceTo(pos);
-    if (d < 14) {
+    // chained explosions shouldn't stack into orbit: one launch per 0.6 s
+    if (d < 14 && g.simTime - this.lastLaunch > 0.6) {
+      this.lastLaunch = g.simTime;
       // launch the player (it's fun)
       const k = (1 - d / 14) * power;
       const dir = v.pos.clone().sub(pos).normalize();
       dir.y = Math.max(0.6, dir.y);
-      v.body.applyImpulse({ x: dir.x * v.spec.mass * 9 * k, y: dir.y * v.spec.mass * 9 * k, z: dir.z * v.spec.mass * 9 * k }, true);
+      dir.normalize();
+      v.body.applyImpulse({ x: dir.x * v.spec.mass * 11 * k, y: dir.y * v.spec.mass * 11 * k, z: dir.z * v.spec.mass * 11 * k }, true);
       v.body.applyTorqueImpulse({ x: (Math.random() - 0.5) * v.spec.mass * 6 * k, y: 0, z: (Math.random() - 0.5) * v.spec.mass * 6 * k }, true);
     }
     // push nearby debris
