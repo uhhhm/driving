@@ -85,7 +85,8 @@ export class TitleMenu {
             <kbd>C</kbd> camera · <kbd>B</kbd> look back<br>
             <kbd>R</kbd> reset to road · <kbd>H</kbd> horn<br>
             <kbd>F</kbd> photo mode · <kbd>P</kbd>/<kbd>ESC</kbd> pause<br>
-            <kbd>\`</kbd> debug panel · 🎮 gamepad ok
+            <kbd>M</kbd> radio · <kbd>\`</kbd> debug panel<br>
+            🎮 gamepad supported
           </div>
         </div>
         <div>
@@ -170,7 +171,7 @@ export class PauseMenu {
     this.el.className = 'menu hidden';
     document.body.appendChild(this.el);
   }
-  open(info: { seed: string; volume: number; crashCam: boolean; quality: number; score: number; best: number }) {
+  open(info: { seed: string; volume: number; crashCam: boolean; music: boolean; quality: number; score: number; best: number }) {
     this.el.classList.remove('hidden');
     this.el.innerHTML = `<div class="pause-box">
       <div class="pause-title">PAUSED</div>
@@ -185,6 +186,7 @@ export class PauseMenu {
       <label>VOLUME</label><input type="range" min="0" max="1" step="0.05" value="${info.volume}" data-a="volume" />
       <label>GRAPHICS QUALITY</label><input type="range" min="0" max="2" step="1" value="${info.quality}" data-a="quality" />
       <label><input type="checkbox" data-a="crashcam" ${info.crashCam ? 'checked' : ''}/> CINEMATIC CRASH CAM</label>
+      <label><input type="checkbox" data-a="music" ${info.music ? 'checked' : ''}/> SEED FM RADIO (M)</label>
     </div>`;
     this.el.querySelectorAll<HTMLElement>('[data-a]').forEach((b) => {
       const a = b.dataset.a!;

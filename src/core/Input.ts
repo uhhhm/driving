@@ -28,6 +28,7 @@ const KEYMAP: Record<string, string> = {
   Escape: 'pause', KeyP: 'pause',
   KeyF: 'photo',
   KeyH: 'horn',
+  KeyM: 'music',
 };
 
 export class Input {
@@ -89,6 +90,7 @@ export class Input {
     let handbrake = this.down.has('handbrake');
     let boost = this.down.has('boost');
     let lookBack = this.down.has('lookBack');
+    let horn = this.isDown('horn');
 
     // keyboard steering: ramp in, faster return, and less lock at speed
     const rate = steerTarget === 0 ? 7 : Math.sign(steerTarget) !== Math.sign(this.steerSmooth) ? 9 : 4.2;
@@ -127,7 +129,7 @@ export class Input {
       edge(9, 'pause'); // start
       edge(8, 'reset'); // back/select
       edge(12, 'photo'); // dpad up
-      edge(11, 'horn');
+      horn = horn || pressedNow(11);
       edge(13, 'reset'); // dpad down
       break;
     }
@@ -151,7 +153,7 @@ export class Input {
       camera: this.consume('camera'),
       pause: this.consume('pause'),
       photo: this.consume('photo'),
-      horn: this.isDown('horn'),
+      horn,
     };
   }
 

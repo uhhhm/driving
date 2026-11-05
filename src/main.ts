@@ -1,8 +1,10 @@
 import { Game } from './core/Game';
+import { RAPIER } from './core/Physics';
 import { DebugPanel } from './core/Debug';
 import { TitleMenu, PauseMenu } from './ui/Menu';
 import { AutoPilot } from './game/AutoPilot';
 import { audio } from './audio/AudioEngine';
+import { radio } from './audio/Radio';
 import { carById } from './vehicle/VehicleDefs';
 import { bus } from './core/events';
 import type { Controls } from './core/Input';
@@ -23,7 +25,7 @@ async function boot() {
   (window as unknown as { game: Game; bus: typeof bus }).game = game;
   (window as unknown as { bus: typeof bus }).bus = bus;
   (game as unknown as { __carById: typeof carById }).__carById = carById;
-  (window as unknown as { __R: unknown }).__R = (await import('./core/Physics')).RAPIER;
+  (window as unknown as { __R: unknown }).__R = RAPIER;
   new DebugPanel(game);
 
   // attract mode: the menu sits over a live, self-driving world
@@ -37,6 +39,7 @@ async function boot() {
     return { ...c, ...pilot.controls(dt), reset: false, camera: false, photo: false };
   };
   game.events.enabled = false;
+  game.hud.visible = false;
   game.start();
   setTimeout(() => loading.classList.add('done'), 300);
 
@@ -48,6 +51,8 @@ async function boot() {
     const r = quickstart && first ? { seed, car: carId, paint: save.data.paints[carId] ?? 0 } : await title.open();
     title.el.classList.add('hidden');
     audio.start();
+    radio.start();
+    if (radio.enabled && first) bus.emit('toast', { text: '♪ NOW PLAYING · SEED FM', sub: `${game.seedText} MIX · PRESS M TO TOGGLE`, color: '#ff3df2' });
     if (r.seed !== game.seedText) {
       location.hash = `seed=${encodeURIComponent(r.seed)}&play`;
       location.reload();
@@ -60,6 +65,7 @@ async function boot() {
     }
     pilot.active = false;
     game.paused = false;
+    game.hud.visible = true;
     game.rig.mode = 'chase';
     game.rig.snap(game.player.vehicle);
     game.events.enabled = true;
@@ -95,7 +101,7 @@ async function boot() {
     }
     game.paused = true;
     const s = save.data.settings;
-    pause.open({ seed: game.seedText, volume: s.volume, crashCam: s.crashCam, quality: s.quality, score: game.score.total, best: save.data.bestBySeed[game.seedText] ?? 0 });
+    pause.open({ seed: game.seedText, volume: s.volume, crashCam: s.crashCam, music: s.music, quality: s.quality, score: game.score.total, best: save.data.bestBySeed[game.seedText] ?? 0 });
   };
   pause.onAction = (a) => {
     const [k, val] = a.split(':');
@@ -115,6 +121,7 @@ async function boot() {
         endRun();
         pilot.active = true;
         game.paused = false;
+        game.hud.visible = false;
         game.rig.mode = 'cinematic';
         game.events.cancel();
         game.police.endChase(false);
@@ -153,6 +160,11 @@ async function boot() {
         game.setQuality(s.quality);
         save.write();
         break;
+      case 'music':
+        s.music = val === '1';
+        radio.setEnabled(s.music);
+        save.write();
+        break;
       case 'crashcam':
         s.crashCam = val === '1';
         game.impacts.crashCamEnabled = s.crashCam;
@@ -161,8 +173,14 @@ async function boot() {
     }
   };
   // resume audio on any interaction
-  window.addEventListener('pointerdown', () => audio.start());
-  window.addEventListener('keydown', () => audio.start());
+  window.addEventListener('pointerdown', () => {
+    audio.start();
+    if (!pilot.active) radio.start();
+  });
+  window.addEventListener('keydown', () => {
+    audio.start();
+    if (!pilot.active) radio.start();
+  });
   drive(true);
 }
 boot();

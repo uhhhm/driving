@@ -22,7 +22,9 @@ import { Particles } from '../fx/Particles';
 import { SkidMarks } from '../fx/SkidMarks';
 import { VehicleFX } from '../fx/VehicleFX';
 import { Headlights } from '../fx/Headlights';
+import { Birds } from '../fx/Birds';
 import { audio } from '../audio/AudioEngine';
+import { radio } from '../audio/Radio';
 import { Impacts } from '../game/Impacts';
 import { Traffic } from '../game/Traffic';
 import { Score } from '../game/Score';
@@ -59,6 +61,7 @@ export class Game {
   skids!: SkidMarks;
   vfx!: VehicleFX;
   headlights!: Headlights;
+  birds!: Birds;
   impacts!: Impacts;
   traffic!: Traffic;
   score!: Score;
@@ -124,6 +127,8 @@ export class Game {
     await this.physics.init();
     this.seedText = seedText;
     this.seed = hashSeed(seedText);
+    radio.configure(this.seed);
+    radio.enabled = this.save.data.settings.music;
     this.chunks = new ChunkManager(this.seed, this.physics, this.scene);
     this.setPieces = new SetPieces(this.physics, this.scene);
     this.chunks.setPieces = this.setPieces;
@@ -137,6 +142,7 @@ export class Game {
     this.hud = new HUD(this);
     this.vfx = new VehicleFX(this, this.particles, this.skids);
     this.headlights = new Headlights(this.scene);
+    this.birds = new Birds(this);
     this.impacts = new Impacts(this, this.particles);
     this.traffic = new Traffic(this, this.impacts, this.particles);
     this.score = new Score(this);
@@ -313,6 +319,12 @@ export class Game {
       if (ctl.camera) this.rig.cycle();
       if (ctl.reset) this.resetToRoad();
       if (ctl.horn && !this.hornHeld) audio.horn();
+      if (this.input.consume('music')) {
+        radio.setEnabled(!radio.enabled);
+        this.save.data.settings.music = radio.enabled;
+        this.save.write();
+        bus.emit('toast', { text: radio.enabled ? '♪ SEED FM ON' : 'RADIO OFF', color: '#ff3df2' });
+      }
       this.hornHeld = ctl.horn;
     }
     this.hud.minimap.markers.length = 0;
@@ -368,11 +380,13 @@ export class Game {
       this.vfx.update(dt, realDt);
       mark('vfx');
       this.particles.update(dt);
+      this.birds.update(dt);
       mark('particles');
       this.impacts.update(dt);
       this.checkHazards(dt);
     }
     this.headlights.update(night, this.weather.fog, this.player.model, v);
+    radio.update(realDt, v.kmh, this.score.mult, this.police.active);
     this.env.update(realDt);
     mark('env');
 
