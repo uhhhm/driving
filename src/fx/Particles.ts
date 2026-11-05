@@ -1,6 +1,13 @@
 // CPU-simulated, GPU-rendered particle pools (soft smoke/dust + additive sparks/fire) and debris chunks.
 import * as THREE from 'three';
 
+/** Shared by both pools: viewport height in px and the player car (kept see-through). */
+const particleUniforms = {
+  uViewH: { value: 720 },
+  uFocus: { value: new THREE.Vector3() },
+  uFocusR: { value: 0 },
+};
+
 interface PoolOpts {
   max: number;
   additive: boolean;
@@ -48,16 +55,41 @@ class Pool {
     this.geo.setAttribute('aColor', this.aCol);
     this.geo.setAttribute('aSize', this.aSize);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uScale: { value: 600 }, ...THREE.UniformsLib.fog },
+      uniforms: { ...THREE.UniformsLib.fog, ...particleUniforms },
       transparent: true,
       depthWrite: false,
       blending: o.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
       fog: true,
+      // only soft smoke/dust thins out over the car; boost flames and sparks stay at full strength
+      defines: o.additive ? {} : { FOCUS_FADE: '' },
       vertexShader: /* glsl */ `
-        attribute vec4 aColor; attribute float aSize; uniform float uScale; varying vec4 vC;
+        attribute vec4 aColor; attribute float aSize;
+        uniform float uViewH; uniform vec3 uFocus; uniform float uFocusR;
+        varying vec4 vC;
         #include <fog_pars_vertex>
-        void main(){ vC = aColor; vec4 mvPosition = modelViewMatrix * vec4(position,1.0);
-          gl_PointSize = aSize * uScale / max(0.1, -mvPosition.z); gl_Position = projectionMatrix * mvPosition;
+        void main(){
+          vC = aColor;
+          vec4 mvPosition = modelViewMatrix * vec4(position,1.0);
+          float depth = max(0.1, -mvPosition.z);
+          // projected size in pixels (tracks the live FOV via the projection matrix)
+          float px = aSize * projectionMatrix[1][1] * 0.5 * uViewH / depth;
+          // never let one sprite cover a big chunk of the screen
+          float maxPx = uViewH * 0.22;
+          vC.a *= min(1.0, maxPx / max(px, 1.0));
+          gl_PointSize = min(px, maxPx);
+          // fade out as particles reach the camera instead of blooming into a full-screen blob
+          vC.a *= smoothstep(1.2, 4.5, depth);
+          #ifdef FOCUS_FADE
+          // keep the player's car readable: thin out smoke/dust sitting between the camera and the car
+          vec4 f = viewMatrix * vec4(uFocus, 1.0);
+          float fd = max(0.1, -f.z);
+          if (uFocusR > 0.0 && depth < fd - 0.3) {
+            float sep = length(mvPosition.xy / depth - f.xy / fd) * fd; // distance in metres at the car's depth
+            float cover = 1.0 - smoothstep(uFocusR, uFocusR * 2.2, sep + aSize * 0.25);
+            vC.a *= 1.0 - 0.7 * cover;
+          }
+          #endif
+          gl_Position = projectionMatrix * mvPosition;
           #include <fog_vertex>
         }`,
       fragmentShader: /* glsl */ `
@@ -160,22 +192,27 @@ export class Particles {
     scene.add(this.soft.points, this.glow.points, this.group);
   }
 
-  setScale(h: number, fovDeg: number) {
-    const s = h / (2 * Math.tan((fovDeg * Math.PI) / 360));
-    (this.soft.points.material as THREE.ShaderMaterial).uniforms.uScale.value = s;
-    (this.glow.points.material as THREE.ShaderMaterial).uniforms.uScale.value = s;
+  /** Viewport height in device pixels; sprite size follows the live camera FOV in the shader. */
+  setScale(h: number) {
+    particleUniforms.uViewH.value = h;
+  }
+
+  /** World position + radius of the object particles should never hide (the player's car). */
+  setFocus(p: THREE.Vector3, radius: number) {
+    particleUniforms.uFocus.value.copy(p);
+    particleUniforms.uFocusR.value = radius;
   }
 
   smoke(p: THREE.Vector3, v: THREE.Vector3, amount: number, color: [number, number, number] = [0.85, 0.85, 0.88]) {
     if (Math.random() > this.quality) return;
     const r = () => (Math.random() - 0.5) * 2;
-    this.soft.emit(p.x + r() * 0.2, p.y + 0.2, p.z + r() * 0.2, v.x * 0.3 + r() * 1.2, 0.8 + Math.random() * 1.2, v.z * 0.3 + r() * 1.2, color[0], color[1], color[2], 0.35 * amount + 0.1, 0.9, 1.6 + Math.random() * 1.4, 2.6, 1.2, -0.3);
+    this.soft.emit(p.x + r() * 0.2, p.y + 0.2, p.z + r() * 0.2, v.x * 0.3 + r() * 1.2, 0.8 + Math.random() * 1.2, v.z * 0.3 + r() * 1.2, color[0], color[1], color[2], 0.3 * amount + 0.08, 0.8, 1.4 + Math.random() * 1.2, 2.0, 1.2, -0.3);
   }
 
   dust(p: THREE.Vector3, v: THREE.Vector3, amount: number, color: [number, number, number]) {
     if (Math.random() > this.quality) return;
     const r = () => (Math.random() - 0.5) * 2;
-    this.soft.emit(p.x + r() * 0.3, p.y + 0.15, p.z + r() * 0.3, v.x * 0.2 + r() * 1.5, 0.5 + Math.random() * 1.5, v.z * 0.2 + r() * 1.5, color[0], color[1], color[2], 0.45 * amount, 0.8, 1.2 + Math.random(), 3.0, 1.0, 0.2);
+    this.soft.emit(p.x + r() * 0.3, p.y + 0.15, p.z + r() * 0.3, v.x * 0.2 + r() * 1.5, 0.5 + Math.random() * 1.5, v.z * 0.2 + r() * 1.5, color[0], color[1], color[2], 0.32 * amount, 0.7, 1.0 + Math.random() * 0.8, 1.9, 1.0, 0.2);
   }
 
   sparks(p: THREE.Vector3, dir: THREE.Vector3, count: number, speed = 8) {

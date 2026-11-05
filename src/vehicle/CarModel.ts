@@ -3,6 +3,92 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CarSpec, BodyStyle } from './VehicleDefs';
 
+// Body colour regions (per grid quad). Paint + accent share the vertex-coloured paint material.
+const R_PAINT = 0;
+const R_GLASS = 1;
+const R_TRIM = 2;
+const R_ACCENT = 3;
+
+/**
+ * For each vertex of a non-indexed mesh, the vertices at the same position whose face normal is
+ * within `creaseDeg` of its own. Averaging face normals over that set gives smooth panels with
+ * hard edges at creases (like BufferGeometryUtils.toCreasedNormals), and because the topology
+ * never changes it can be reused every time the body is deformed.
+ */
+function buildCreaseShare(pos: ArrayLike<number>, creaseDeg: number) {
+  const n = pos.length / 3;
+  const fn = faceNormals(pos);
+  for (let t = 0; t < fn.length; t += 3) {
+    const l = Math.hypot(fn[t], fn[t + 1], fn[t + 2]) || 1;
+    fn[t] /= l;
+    fn[t + 1] /= l;
+    fn[t + 2] /= l;
+  }
+  const cos = Math.cos((creaseDeg * Math.PI) / 180);
+  const q = (v: number) => Math.round(v * 1e4);
+  const keys: string[] = new Array(n);
+  const buckets = new Map<string, number[]>();
+  for (let i = 0; i < n; i++) {
+    const k = (keys[i] = `${q(pos[i * 3])},${q(pos[i * 3 + 1])},${q(pos[i * 3 + 2])}`);
+    let b = buckets.get(k);
+    if (!b) buckets.set(k, (b = []));
+    b.push(i);
+  }
+  const start = new Int32Array(n + 1);
+  const list: number[] = [];
+  for (let i = 0; i < n; i++) {
+    start[i] = list.length;
+    const a = ((i / 3) | 0) * 3;
+    for (const j of buckets.get(keys[i])!) {
+      const c = ((j / 3) | 0) * 3;
+      // always keep the vertex's own triangle, so slivers that are degenerate at rest still get a
+      // normal once a crash stretches them open
+      if (j === i || fn[a] * fn[c] + fn[a + 1] * fn[c + 1] + fn[a + 2] * fn[c + 2] >= cos) list.push(c / 3);
+    }
+  }
+  start[n] = list.length;
+  return { start, tris: Int32Array.from(list) };
+}
+
+type CreaseShare = ReturnType<typeof buildCreaseShare>;
+
+/** Smooth-within-crease vertex normals from the current positions (see buildCreaseShare). */
+function applyCreasedNormals(geo: THREE.BufferGeometry, share: CreaseShare) {
+  const pos = geo.attributes.position.array as Float32Array;
+  const nrm = geo.attributes.normal.array as Float32Array;
+  const fn = faceNormals(pos);
+  const n = pos.length / 3;
+  for (let i = 0; i < n; i++) {
+    let x = 0, y = 0, z = 0;
+    for (let k = share.start[i]; k < share.start[i + 1]; k++) {
+      const t = share.tris[k] * 3;
+      x += fn[t];
+      y += fn[t + 1];
+      z += fn[t + 2];
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    nrm[i * 3] = x / l;
+    nrm[i * 3 + 1] = y / l;
+    nrm[i * 3 + 2] = z / l;
+  }
+  geo.attributes.normal.needsUpdate = true;
+}
+
+function faceNormals(pos: ArrayLike<number>) {
+  const t = pos.length / 9;
+  const out = new Float32Array(t * 3);
+  for (let f = 0; f < t; f++) {
+    const o = f * 9;
+    const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2];
+    const vx = pos[o + 6] - pos[o], vy = pos[o + 7] - pos[o + 1], vz = pos[o + 8] - pos[o + 2];
+    // unnormalised cross product = area-weighted normal
+    out[f * 3] = uy * vz - uz * vy;
+    out[f * 3 + 1] = uz * vx - ux * vz;
+    out[f * 3 + 2] = ux * vy - uy * vx;
+  }
+  return out;
+}
+
 interface Profile {
   // height (top of body) as a function of normalized z (-1 rear .. 1 front)
   top: (z: number) => number;
@@ -95,7 +181,7 @@ export class CarModel {
   paint: THREE.MeshStandardMaterial;
   private basePos: Float32Array;
   private deform: Float32Array;
-  private glassMask: Uint8Array;
+  private crease: CreaseShare;
   headlights: THREE.Mesh[] = [];
   taillights: THREE.MeshBasicMaterial;
   headMat: THREE.MeshBasicMaterial;
@@ -108,12 +194,15 @@ export class CarModel {
   constructor(spec: CarSpec, opts: { paint?: number; accent?: number; plate?: string; police?: boolean; simple?: boolean } = {}) {
     this.spec = spec;
     const prof = PROFILES[spec.style];
-    this.paint = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.28, metalness: 0.35 });
+    this.paint = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.35 });
+    const glass = new THREE.MeshStandardMaterial({ color: 0x0a0d13, roughness: 0.06, metalness: 0.7, envMapIntensity: 1.4 });
+    const trim = new THREE.MeshStandardMaterial({ color: 0x121316, roughness: 0.8, metalness: 0.1 });
     const geo = this.buildBody(prof, opts.simple ? 4 : 8);
     this.basePos = (geo.attributes.position.array as Float32Array).slice();
     this.deform = new Float32Array(this.basePos.length);
-    this.glassMask = new Uint8Array(geo.attributes.position.count);
-    this.body = new THREE.Mesh(geo, this.paint);
+    this.crease = buildCreaseShare(this.basePos, 32);
+    applyCreasedNormals(geo, this.crease);
+    this.body = new THREE.Mesh(geo, [this.paint, glass, trim]);
     this.body.castShadow = true;
     this.body.receiveShadow = true;
     this.bodyGroup.add(this.body);
@@ -132,12 +221,13 @@ export class CarModel {
         hl.position.set(s * (W - 0.32 - prof.noseTaper * 0.5), Math.max(prof.bottom + 0.2, hy), L - 0.01);
         this.bodyGroup.add(hl);
         this.headlights.push(hl);
-        const tl = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.1, 0.05), this.taillights);
+        const tl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.05), this.taillights);
         tl.position.set(s * (W - 0.3), prof.top(-0.98) - 0.15, -L + 0.01);
         this.bodyGroup.add(tl);
       }
     }
     this.addStyleExtras(spec, prof, opts);
+    if (opts.plate && spec.style !== 'couch') this.addPlate(opts.plate, prof);
     // wheels
     const tireMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
     const rimMat = new THREE.MeshStandardMaterial({ color: spec.style === 'muscle' ? 0xc0c0c0 : 0x2a2a2e, roughness: 0.3, metalness: 0.8 });
@@ -163,11 +253,14 @@ export class CarModel {
   }
 
   private buildBody(p: Profile, seg: number): THREE.BufferGeometry {
-    const box = new THREE.BoxGeometry(1, 1, 1, seg, Math.max(3, seg / 2), seg * 2);
+    // twice the columns across the width so the twin stripes land on whole quads
+    const ySeg = Math.max(4, seg / 2 + 1);
+    const box = new THREE.BoxGeometry(1, 1, 1, seg * 2, ySeg, seg * 2);
     const pos = box.attributes.position;
     for (let i = 0; i < pos.count; i++) {
       const nx = pos.getX(i) * 2; // -1..1
-      const ny = pos.getY(i) + 0.5; // 0..1
+      // bunch rows toward the bottom: a thin sill row and taller glass rows
+      const ny = Math.pow(pos.getY(i) + 0.5, 1.6); // 0..1
       const nz = pos.getZ(i) * 2; // -1..1
       const top = p.top(nz);
       let y = p.bottom + ny * (top - p.bottom);
@@ -182,34 +275,61 @@ export class CarModel {
       // soften vertical edges
       const edge = Math.abs(nx);
       const x = nx * w * (1 - 0.06 * Math.pow(ny, 2) * edge);
-      let z = (nz * p.length) / 2;
+      const z = (nz * p.length) / 2;
       // slope the bottom up at the ends a bit
       if (ny < 0.1) y += ends * 0.12;
       pos.setXYZ(i, x, y, z);
     }
-    let g: THREE.BufferGeometry = box.toNonIndexed();
-    g.deleteAttribute('uv');
-    g.computeVertexNormals();
-    // per-face colour regions: paint / glass / trim
-    const n = g.attributes.position.count;
-    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-    g.setAttribute('region', new THREE.BufferAttribute(new Uint8Array(n), 1));
-    const P = g.attributes.position;
-    const N = g.attributes.normal;
-    const R = g.attributes.region as THREE.BufferAttribute;
-    for (let f = 0; f < n; f += 3) {
-      let cy = 0, cz = 0, ny = 0;
-      for (let k = 0; k < 3; k++) {
-        cy += P.getY(f + k) / 3;
-        cz += P.getZ(f + k) / 3;
-        ny += N.getY(f + k) / 3;
+    const flat = box.toNonIndexed();
+    flat.deleteAttribute('uv');
+    flat.deleteAttribute('normal');
+    // Classify whole grid quads (BoxGeometry emits each cell as two consecutive triangles), so
+    // region borders follow the grid instead of zig-zagging along triangle diagonals.
+    const src = flat.attributes.position.array as Float32Array;
+    const quads = src.length / 18;
+    const fn = faceNormals(src);
+    const stripes = this.spec.style === 'muscle' || this.spec.style === 'coupe' || this.spec.style === 'wedge';
+    const regionOf = new Uint8Array(quads);
+    for (let qd = 0; qd < quads; qd++) {
+      let cx = 0, cy = 0, cz = 0;
+      for (let k = 0; k < 6; k++) {
+        const o = (qd * 6 + k) * 3;
+        cx += src[o] / 6;
+        cy += src[o + 1] / 6;
+        cz += src[o + 2] / 6;
       }
+      const fx = fn[qd * 6] + fn[qd * 6 + 3], fy = fn[qd * 6 + 1] + fn[qd * 6 + 4], fz = fn[qd * 6 + 2] + fn[qd * 6 + 5];
+      const l = Math.hypot(fx, fy, fz) || 1;
+      const nx = fx / l;
+      const ny = fy / l;
       const zn = cz / (p.length / 2);
-      let region = 0; // paint
-      if (cy > p.beltline + 0.04 && zn > p.cabinZ[0] && zn < p.cabinZ[1] && ny < 0.92) region = 1; // glass
-      if (cy < p.bottom + 0.14) region = 2; // trim
-      for (let k = 0; k < 3; k++) R.setX(f + k, region);
+      let r = R_PAINT;
+      if (cy > p.beltline + 0.05 && zn > p.cabinZ[0] && zn < p.cabinZ[1] && ny < 0.92) r = R_GLASS;
+      else if (ny < -0.5 || (cy < p.bottom + 0.11 && Math.abs(nx) > 0.5)) r = R_TRIM; // underside + side sills
+      else if (stripes && Math.abs(cx) > 0.08 && Math.abs(cx) < 0.24) r = R_ACCENT;
+      else if (this.spec.style === 'van' && cy > 0.95 && cy < 1.3 && ny < 0.5 && zn < p.cabinZ[0] + 0.1) r = R_ACCENT; // band on the box, not the sloped cab
+      regionOf[qd] = r;
     }
+    // Sort quads into material groups: paint+accent (vertex colours), glass, trim.
+    const groupOf = (r: number) => (r === R_GLASS ? 1 : r === R_TRIM ? 2 : 0);
+    const order = Array.from({ length: quads }, (_, i) => i).sort((a, b) => groupOf(regionOf[a]) - groupOf(regionOf[b]));
+    const n = quads * 6;
+    const outPos = new Float32Array(n * 3);
+    const region = new Uint8Array(n);
+    const counts = [0, 0, 0];
+    order.forEach((qd, k) => {
+      outPos.set(src.subarray(qd * 18, qd * 18 + 18), k * 18);
+      region.fill(regionOf[qd], k * 6, k * 6 + 6);
+      counts[groupOf(regionOf[qd])] += 6;
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    g.setAttribute('region', new THREE.BufferAttribute(region, 1));
+    g.addGroup(0, counts[0], 0);
+    g.addGroup(counts[0], counts[1], 1);
+    g.addGroup(counts[0] + counts[1], counts[2], 2);
     return g;
   }
 
@@ -217,20 +337,40 @@ export class CarModel {
     const g = this.body.geometry;
     const C = g.attributes.color as THREE.BufferAttribute;
     const R = g.attributes.region as THREE.BufferAttribute;
-    const P = g.attributes.position;
     const pc = new THREE.Color(paint);
     const ac = new THREE.Color(accent);
-    const glass = new THREE.Color(0.04, 0.05, 0.07);
-    const trim = new THREE.Color(0.06, 0.06, 0.06);
-    const stripes = this.spec.style === 'muscle' || this.spec.style === 'coupe' || this.spec.style === 'wedge';
     for (let i = 0; i < C.count; i++) {
-      const r = R.getX(i);
-      let c = r === 1 ? glass : r === 2 ? trim : pc;
-      if (r === 0 && stripes && Math.abs(P.getX(i)) < 0.22 && Math.abs(P.getX(i)) > 0.08) c = ac;
-      if (r === 0 && this.spec.style === 'van' && P.getY(i) > 1.0 && P.getY(i) < 1.3) c = ac;
+      const c = R.getX(i) === R_ACCENT ? ac : pc;
       C.setXYZ(i, c.r, c.g, c.b);
     }
     C.needsUpdate = true;
+  }
+
+  /** Rear licence plate showing the world seed. */
+  private addPlate(text: string, p: Profile) {
+    const cv = document.createElement('canvas');
+    cv.width = 256;
+    cv.height = 64;
+    const c = cv.getContext('2d');
+    if (!c) return;
+    c.fillStyle = '#f1efe4';
+    c.fillRect(0, 0, 256, 64);
+    c.strokeStyle = '#1b1d24';
+    c.lineWidth = 4;
+    c.strokeRect(4, 4, 248, 56);
+    c.fillStyle = '#1b1d24';
+    const t = text.toUpperCase().slice(0, 12);
+    c.font = `700 ${Math.min(40, Math.floor(400 / Math.max(6, t.length)))}px "Chakra Petch", monospace`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(t, 128, 34);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.13).rotateY(Math.PI), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 }));
+    plate.position.set(0, p.bottom + 0.32, -p.length / 2 - 0.012);
+    this.bodyGroup.add(plate);
+    this.plateCanvas = cv;
   }
 
   private addStyleExtras(spec: CarSpec, p: Profile, opts: { accent?: number }) {
@@ -249,8 +389,10 @@ export class CarModel {
     };
     // bumpers
     if (spec.style !== 'couch') {
-      addPart('front bumper', new THREE.BoxGeometry(p.width * 0.98, 0.22, 0.25), dark, 0, p.bottom + 0.12, L + 0.05, 35);
-      addPart('rear bumper', new THREE.BoxGeometry(p.width * 0.98, 0.22, 0.25), dark, 0, p.bottom + 0.12, -L - 0.05, 35);
+      // slim charcoal bumpers so the body, not a black slab, reads from the chase cam
+      const bumper = new THREE.MeshStandardMaterial({ color: 0x2a2c31, roughness: 0.55, metalness: 0.25 });
+      addPart('front bumper', new THREE.BoxGeometry(p.width * 0.96, 0.15, 0.16), bumper, 0, p.bottom + 0.09, L + 0.04, 35);
+      addPart('rear bumper', new THREE.BoxGeometry(p.width * 0.96, 0.15, 0.16), bumper, 0, p.bottom + 0.09, -L - 0.04, 35);
       for (const s of [-1, 1]) {
         addPart('mirror', new THREE.BoxGeometry(0.2, 0.12, 0.16), accentMat, s * (W + 0.05), p.beltline + 0.05, L * (p.cabinZ[1] - 0.05), 10);
       }
@@ -390,7 +532,7 @@ export class CarModel {
       arr[i + 2] = base[i + 2] + this.deform[i + 2];
     }
     pos.needsUpdate = true;
-    this.body.geometry.computeVertexNormals();
+    applyCreasedNormals(this.body.geometry, this.crease);
     const detached: DetachPart[] = [];
     for (const p of this.parts) {
       if (!p.attached) continue;
@@ -414,7 +556,7 @@ export class CarModel {
     (pos.array as Float32Array).set(this.basePos);
     this.deform.fill(0);
     pos.needsUpdate = true;
-    this.body.geometry.computeVertexNormals();
+    applyCreasedNormals(this.body.geometry, this.crease);
     for (const p of this.parts) {
       p.health = 40;
       p.mesh.position.copy(p.anchor);
@@ -438,7 +580,12 @@ export class CarModel {
   dispose() {
     this.root.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) m.geometry.dispose();
+      if (!m.isMesh) return;
+      m.geometry.dispose();
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        (mat as THREE.MeshStandardMaterial).map?.dispose();
+        mat.dispose();
+      }
     });
   }
 }

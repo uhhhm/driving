@@ -35,6 +35,8 @@ import { PhotoMode } from '../game/PhotoMode';
 import { Save } from '../game/Save';
 import { paintColor } from '../ui/Menu';
 
+const _focus = new THREE.Vector3();
+
 export interface PlayerCar {
   vehicle: Vehicle;
   model: CarModel;
@@ -120,7 +122,7 @@ export class Game {
     this.postfx?.setSize(w, h);
     this.rig.camera.aspect = w / h;
     this.rig.camera.updateProjectionMatrix();
-    this.particles?.setScale(h * this.renderer.getPixelRatio(), this.rig.camera.fov);
+    this.particles?.setScale(h * this.renderer.getPixelRatio());
   }
 
   async init(seedText: string, carId: string, paint: number) {
@@ -362,6 +364,8 @@ export class Game {
     m.root.position.lerpVectors(this.player.prevPos, v.pos, alpha);
     m.root.quaternion.slerpQuaternions(this.player.prevQuat, v.quat, alpha);
     this.updateWheels();
+    _focus.set(0, v.spec.colliderY, 0).applyQuaternion(m.root.quaternion).add(m.root.position);
+    this.particles.setFocus(_focus, this.photo.active ? 0 : Math.max(v.spec.half[0], v.spec.half[1]) + 0.4);
 
     let tq = performance.now();
     const mark = (k: string) => {
