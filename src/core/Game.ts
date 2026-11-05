@@ -101,6 +101,7 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.info.autoReset = false;
     container.appendChild(this.renderer.domElement);
     this.rig = new CameraRig(window.innerWidth / window.innerHeight);
     this.save = new Save();
@@ -371,6 +372,7 @@ export class Game {
       letterbox: this.rig.crash ? 0.09 : 0,
     });
     const tr = performance.now();
+    this.renderer.info.reset();
     this.postfx.render(realDt);
     this.stats.renderMs = performance.now() - tr;
     this.stats.frameMs = performance.now() - now;

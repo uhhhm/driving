@@ -7,6 +7,7 @@ import type { Controls } from '../core/Input';
 import { clamp, lerp, smoothstep } from '../core/rng';
 import { Surface } from '../world/types';
 import type { CarSpec } from './VehicleDefs';
+import type { Rail } from '../world/SetPieces';
 
 export interface SurfaceProps {
   mu: number;
@@ -63,6 +64,8 @@ const _s = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _railP = new THREE.Vector3();
+const _railT = new THREE.Vector3();
 
 export class Vehicle {
   spec: CarSpec;
@@ -94,6 +97,7 @@ export class Vehicle {
   drifting = false;
   driftMode = false;
   private latchPitch = false;
+  onStunt = false;
   private latchSteer = false;
   private driftExitTimer = 0;
   driftTime = 0;
@@ -387,8 +391,8 @@ export class Vehicle {
       const sProps = SURFACES[w.surface];
       // suspension
       const compVel = (w.comp - w.prevComp) / dt;
-      const k = this.k * this.tune.springMul;
-      let Fs = k * w.comp + this.c * compVel * (compVel > 0 ? 1 : 1.4);
+      const k = this.k * this.tune.springMul * (this.onStunt ? 4 : 1);
+      let Fs = k * w.comp + this.c * (this.onStunt ? 2 : 1) * compVel * (compVel > 0 ? 1 : 1.4);
       if (w.comp > spec.travel) Fs += k * 6 * (w.comp - spec.travel); // bump stop
       // surface bumpiness
       if (sProps.bump > 0 && sp > 2) Fs += k * sProps.bump * Math.sin(performance.now() * 0.05 + w.local.z * 9) * Math.min(1, sp / 15);
@@ -497,13 +501,50 @@ export class Vehicle {
     if (grounded > 0) {
       // downforce + loop assist (keeps you glued in loops & half-pipes)
       let df = spec.downforce * v2;
+      // stunt surfaces (loops, half-pipes, tunnels): "magnet" gravity pulls you into the track
       let stunt = 0;
+      const sn = _v2.set(0, 0, 0);
+      let rail: Rail | undefined;
       for (const w of this.wheels) {
         if (!w.grounded) continue;
-        const k = this.physics.info.get(w.hitCollider)?.kind;
-        if (k === 'setpiece' || k === 'road') stunt++;
+        const inf = this.physics.info.get(w.hitCollider);
+        const k = inf?.kind;
+        rail ??= (inf?.ref as { rail?: Rail } | undefined)?.rail;
+        if (k === 'setpiece' || (k === 'road' && up.y < 0.8)) {
+          stunt++;
+          sn.add(w.normal);
+        }
       }
-      if (up.y < 0.7 && grounded >= 2 && stunt >= 2) df += m * (9.81 * 1.6) * (1.1 - up.y) * 1.2 + v2 * 8;
+      this.onStunt = stunt >= 2;
+      if (stunt >= 2 && this.speedAbs > 4) {
+        sn.normalize();
+        // keep momentum through the inversion
+        if (sn.y < 0.3) {
+          const push = m * 3.5 * dt;
+          body.applyImpulse({ x: fwd.x * push, y: fwd.y * push, z: fwd.z * push }, true);
+        }
+        const gk = 9.81 * 1.6 * m * Math.min(1, (1 - sn.y) * 3) * dt; // only when tilted
+        // cancel world gravity, replace with gravity into the surface
+        body.applyImpulse({ x: -sn.x * gk, y: gk - sn.y * gk, z: -sn.z * gk }, true);
+        df += v2 * 2.5;
+      }
+      // loops act as a soft rail: steer the car toward the helix centreline
+      if (rail && this.speedAbs > 5) {
+        const d = rail.nearest(this.pos, _railP, _railT);
+        if (d < 8) {
+          const ax = rail.axis;
+          const err = (this.pos.x - _railP.x) * ax.x + (this.pos.y - _railP.y) * ax.y + (this.pos.z - _railP.z) * ax.z;
+          const vIdeal = (_railT.x * ax.x + _railT.y * ax.y + _railT.z * ax.z) * this.speedAbs;
+          const vLat = this.vel.x * ax.x + this.vel.y * ax.y + this.vel.z * ax.z;
+          const j = -(err * 9 + (vLat - vIdeal) * 6) * m * dt;
+          body.applyImpulse({ x: ax.x * j, y: ax.y * j, z: ax.z * j }, true);
+          // and align the heading with the rail
+          const yawErr = fwd.dot(ax) - _railT.dot(ax);
+          const Iy = (m / 12) * (4 * spec.half[0] ** 2 + 4 * spec.half[2] ** 2) * spec.inertia[1];
+          const tk = yawErr * Iy * 30 * dt;
+          body.applyTorqueImpulse({ x: up.x * tk, y: up.y * tk, z: up.z * tk }, true);
+        }
+      }
       body.applyImpulse({ x: -up.x * df * dt, y: -up.y * df * dt, z: -up.z * df * dt }, true);
 
       const beta = this.slipAngleBody;

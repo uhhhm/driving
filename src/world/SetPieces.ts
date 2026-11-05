@@ -11,6 +11,36 @@ interface Built {
   colliderSrc: { pos: Float32Array; idx: Uint32Array }[];
   boxes: { c: THREE.Vector3; h: THREE.Vector3; q: THREE.Quaternion }[];
   colliders: RAPIER.Collider[];
+  rail?: THREE.Vector3[];
+  railAxis?: THREE.Vector3;
+}
+
+/** Soft rail: given a position, returns the nearest centreline point and the local tangent. */
+export interface Rail {
+  nearest(p: THREE.Vector3, outPoint: THREE.Vector3, outTangent: THREE.Vector3): number;
+  axis: THREE.Vector3;
+}
+
+function makeRail(pts: THREE.Vector3[], axis: THREE.Vector3): Rail {
+  return {
+    axis,
+    nearest(p, outPoint, outTangent) {
+      let best = 0;
+      let bd = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = pts[i].distanceToSquared(p);
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      }
+      outPoint.copy(pts[best]);
+      const a = pts[Math.max(0, best - 1)];
+      const b = pts[Math.min(pts.length - 1, best + 1)];
+      outTangent.subVectors(b, a).normalize();
+      return Math.sqrt(bd);
+    },
+  };
 }
 
 const neonMat = (c: number, k = 3) => new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(k) });
@@ -66,6 +96,8 @@ export class SetPieces {
     neonCyan: neonMat(0x2ef2ff),
   };
   private signTex: THREE.CanvasTexture;
+  /** local z of each loop's entry (for tests / AI) */
+  loopEntries = new Map<SetPiece, number>();
 
   constructor(
     private physics: Physics,
@@ -127,9 +159,10 @@ export class SetPieces {
       if (on && b.colliders.length === 0) {
         const w = this.physics.world;
         const grp = groups(G_WORLD, G_CAR | G_TRAFFIC | G_DEBRIS);
+        const rail = b.rail && b.railAxis ? makeRail(b.rail, b.railAxis) : undefined;
         for (const src of b.colliderSrc) {
           const col = w.createCollider(RAPIER.ColliderDesc.trimesh(src.pos, src.idx).setFriction(0.8).setCollisionGroups(grp));
-          this.physics.tag(col, { kind: 'setpiece' });
+          this.physics.tag(col, { kind: 'setpiece', ref: rail ? { rail } : undefined });
           b.colliders.push(col);
         }
         for (const bx of b.boxes) {
@@ -203,13 +236,21 @@ export class SetPieces {
         break;
       }
       case 'loop': {
-        const R = 11 + sp.param * 3;
-        const g = loopGeometry(R, 6.5, 4.2);
+        const R = 12 + sp.param * 3;
+        const g = loopGeometry(R, 5.8, 4.7);
+        const bb = g.boundingBox!;
+        const H = bb.max.y;
+        // centre the loop on the piece
+        const cz = (bb.min.z + bb.max.z) / 2;
+        g.translate(0, 0, -cz);
+        this.loopEntries.set(sp, -cz - 14);
         addMesh(g, this.mats.loop, true);
-        // a pair of support towers
-        for (const s of [-1, 1]) addBox(s * 9, R, 0, 0.5, R, 0.5, this.mats.pipe, true);
-        addBox(0, R * 2 + 1.2, 0, 9.5, 0.4, 0.5, this.mats.pipe, false);
-        addBox(0, R * 2 + 2.2, 0, 6, 0.8, 0.1, this.mats.neonPink, false);
+        b.rail = (g.userData.rail as THREE.Vector3[]).map((v) => v.clone().setZ(v.z - cz).applyQuaternion(q).add(origin));
+        b.railAxis = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+        // a pair of support towers and a neon gantry
+        for (const s of [-1, 1]) addBox(s * 9, H / 2, 0, 0.5, H / 2, 0.5, this.mats.pipe, true);
+        addBox(0, H + 1.2, 0, 9.5, 0.4, 0.5, this.mats.pipe, false);
+        addBox(0, H + 2.2, 0, 6, 0.8, 0.1, this.mats.neonPink, false);
         break;
       }
       case 'halfpipe': {
@@ -263,7 +304,7 @@ export class SetPieces {
 function kicker(L: number, W: number, H: number, segs: number): THREE.BufferGeometry {
   const pos: number[] = [];
   const idx: number[] = [];
-  const prof = (t: number) => H * Math.pow(t, 1.7);
+  const prof = (t: number) => H * Math.pow(t, 1.7) - 0.12 * (1 - t) * (1 - t);
   // top surface
   for (let i = 0; i <= segs; i++) {
     const t = i / segs;
@@ -302,35 +343,53 @@ function kicker(L: number, W: number, H: number, segs: number): THREE.BufferGeom
   return g;
 }
 
-/** Loop-the-loop ribbon: enters at z<0 on the ground at x=-off, exits at x=+off. */
+/** Clothoid ("teardrop") loop: curvature ramps in and out like a real coaster loop.
+ *  Enters at z<0 on the ground at x=-off, exits at x=+off. Returns geometry + exit z. */
 function loopGeometry(R: number, W: number, off: number): THREE.BufferGeometry {
-  const segs = 96;
-  const lead = 10; // flat run-in / run-out (m)
+  const kmax = 1 / R;
+  const Le = 30; // easing length (m)
+  const Lc = (2 * Math.PI) / kmax - Le;
+  const total = 2 * Le + Lc;
+  const lead = 14;
+  // the whole ribbon is a helix: x drifts linearly with arc length (run-in, loop and run-out)
+  const span = total + 2 * lead;
+  const slope = (2 * off) / span;
+  const pts: { c: THREE.Vector3; n: THREE.Vector3; s: number }[] = [];
+  const steps = Math.ceil(total / 0.6);
+  // run-in (with a sunken tip so there's no lip)
+  for (let i = 0; i <= 6; i++) {
+    const s = (lead * i) / 6;
+    pts.push({ c: new THREE.Vector3(-off + slope * s, i === 0 ? -0.45 : 0.02, -lead + s), n: new THREE.Vector3(0, 1, 0), s });
+  }
+  let th = 0;
+  let z = 0;
+  let y = 0.02;
+  const h = total / steps;
+  for (let i = 1; i <= steps; i++) {
+    const sMid = (i - 0.5) * h;
+    const k = kmax * Math.min(1, sMid / Le, (total - sMid) / Le);
+    th += k * h;
+    z += Math.cos(th) * h;
+    y += Math.sin(th) * h;
+    const s = lead + i * h;
+    pts.push({ c: new THREE.Vector3(-off + slope * s, y, z), n: new THREE.Vector3(0, Math.cos(th), -Math.sin(th)), s });
+  }
+  const zEnd = z;
+  for (let i = 1; i <= 6; i++) {
+    const s = lead + total + (lead * i) / 6;
+    pts.push({ c: new THREE.Vector3(-off + slope * s, i === 6 ? -0.45 : 0.02, zEnd + (lead * i) / 6), n: new THREE.Vector3(0, 1, 0), s });
+  }
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
-  let arc = 0;
-  const pts: { c: THREE.Vector3; n: THREE.Vector3 }[] = [];
-  // run-in
-  for (let i = 0; i <= 4; i++) pts.push({ c: new THREE.Vector3(-off, 0.02, -lead + (lead * i) / 4), n: new THREE.Vector3(0, 1, 0) });
-  for (let i = 1; i <= segs; i++) {
-    const th = (i / segs) * Math.PI * 2;
-    const x = -off + (2 * off * i) / segs;
-    pts.push({ c: new THREE.Vector3(x, R * (1 - Math.cos(th)) + 0.02, R * Math.sin(th)), n: new THREE.Vector3(0, Math.cos(th), -Math.sin(th)) });
-  }
-  for (let i = 1; i <= 4; i++) pts.push({ c: new THREE.Vector3(off, 0.02, (lead * i) / 4), n: new THREE.Vector3(0, 1, 0) });
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    if (i > 0) arc += p.c.distanceTo(pts[i - 1].c);
-    // width direction ~ x
+  for (const p of pts) {
     pos.push(p.c.x - W / 2, p.c.y, p.c.z, p.c.x + W / 2, p.c.y, p.c.z);
-    uv.push(0, arc, 1, arc);
+    uv.push(0, p.s, 1, p.s);
   }
   for (let i = 0; i < pts.length - 1; i++) {
     const a = i * 2;
     idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
   }
-  // underside (offset along -n)
   const ub = pos.length / 3;
   for (const p of pts) {
     const o = p.n.clone().multiplyScalar(-0.35);
@@ -346,6 +405,8 @@ function loopGeometry(R: number, W: number, off: number): THREE.BufferGeometry {
   g.setAttribute('aUV', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
+  g.computeBoundingBox();
+  g.userData.rail = pts.map((p) => p.c.clone());
   return g;
 }
 

@@ -419,24 +419,6 @@ export class WorldGen {
       H[q] += dA * fa + dB * fb;
       H[q] = Math.max(H[q], 5);
     }
-    // grade limit (relax towards neighbours where too steep)
-    const maxGrade = type === RoadType.Highway ? 0.09 : type === RoadType.Avenue ? 0.06 : 0.16;
-    for (let it = 0; it < 4; it++) {
-      for (let q = 1; q < n; q++) {
-        const lim = maxGrade * ds;
-        if (H[q] - H[q - 1] > lim) H[q] = H[q - 1] + lim;
-        else if (H[q - 1] - H[q] > lim) H[q] = H[q - 1] - lim;
-      }
-      // re-anchor end B by backwards pass
-      H[n - 1] = hB;
-      for (let q = n - 2; q >= 0; q--) {
-        const lim = maxGrade * ds;
-        if (H[q] - H[q + 1] > lim) H[q] = H[q + 1] + lim;
-        else if (H[q + 1] - H[q] > lim) H[q] = H[q + 1] - lim;
-      }
-      H[0] = hA;
-    }
-
     // --- bank from curvature ---
     const bank = new Float32Array(n);
     const K = 14 * this.t.bankStrength;
@@ -481,6 +463,8 @@ export class WorldGen {
           const a = clamp(q + o, 1, n - 2);
           v += Math.abs(bank[a]);
         }
+        // prefer flat ground too (loops & ramps need a level run-up)
+        for (let o = -20; o <= 20; o += 4) v += Math.abs(H[clamp(q + o, 0, n - 1)] - H[q]) * 0.08;
         if (v < bv) {
           bv = v;
           best = q;
@@ -514,10 +498,10 @@ export class WorldGen {
     if (n > 60) {
       if ((type === RoadType.Highway || type === RoadType.Avenue) && sp < 0.14) {
         const q = straightAt(Math.floor(n * 0.35), Math.floor(n * 0.65));
-        flatten(q, 22);
+        flatten(q, 30);
         addPiece('loop', q);
         noTraffic = true;
-        for (let o = -20; o <= 20; o++) flags[clamp(q + o, 0, n - 1)] |= RoadFlag.Stunt;
+        for (let o = -30; o <= 30; o++) flags[clamp(q + o, 0, n - 1)] |= RoadFlag.Stunt;
       } else if (type !== RoadType.Avenue && sp < 0.32) {
         const q = straightAt(Math.floor(n * 0.3), Math.floor(n * 0.7));
         flatten(q, 14);
@@ -538,12 +522,49 @@ export class WorldGen {
       }
     }
 
+    // grade limit (relax towards neighbours where too steep)
+    const maxGrade = type === RoadType.Highway ? 0.09 : type === RoadType.Avenue ? 0.06 : 0.16;
+    for (let it = 0; it < 4; it++) {
+      for (let q = 1; q < n; q++) {
+        const lim = maxGrade * ds;
+        if (H[q] - H[q - 1] > lim) H[q] = H[q - 1] + lim;
+        else if (H[q - 1] - H[q] > lim) H[q] = H[q - 1] - lim;
+      }
+      // re-anchor end B by backwards pass
+      H[n - 1] = hB;
+      for (let q = n - 2; q >= 0; q--) {
+        const lim = maxGrade * ds;
+        if (H[q] - H[q + 1] > lim) H[q] = H[q + 1] + lim;
+        else if (H[q + 1] - H[q] > lim) H[q] = H[q + 1] - lim;
+      }
+      H[0] = hA;
+    }
+
+    // stunt pieces need an exactly level run-up: enforce after grade limiting
+    for (const p of setPieces) {
+      if (p.kind === 'loop' || p.kind === 'ramp') {
+        const h0 = H[p.idx];
+        const flat = p.kind === 'loop' ? 26 : 10;
+        const blend = 12;
+        for (let o = -flat - blend; o <= flat + blend; o++) {
+          const a = p.idx + o;
+          if (a < 0 || a >= n) continue;
+          const f = 1 - smoothstep(flat, flat + blend, Math.abs(o));
+          H[a] = lerp(H[a], h0, f);
+          bank[a] *= 1 - f;
+        }
+      }
+      p.y = H[p.idx];
+    }
+
     // --- crests (jumps!) ---
     if (type !== RoadType.Avenue) {
       const count = type === RoadType.Mountain ? rng.int(0, 1) : rng.int(1, 2);
       for (let c = 0; c < count; c++) {
         const q0 = Math.floor(n * rng.range(0.2, 0.8));
-        if (flags[q0] & RoadFlag.Stunt) continue;
+        let clash = false;
+        for (let o = -25; o <= 25; o++) if (flags[clamp(q0 + o, 0, n - 1)] & RoadFlag.Stunt) clash = true;
+        if (clash) continue;
         const A2 = rng.range(2.2, 4.0) * this.t.crestHeight;
         const Lc = rng.range(40, 60);
         const half = Lc / 2 / ds;
