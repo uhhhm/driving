@@ -116,8 +116,20 @@ export class ChunkManager {
     }
   }
 
+  /** Drop everything (used when world-gen tunables change). */
+  reset() {
+    for (const [k, c] of [...this.chunks]) this.unload(k, c);
+    this.chunks.clear();
+    this.pending.clear();
+    this.queue = [];
+    this.callbacks.clear();
+    this.busy.fill(0);
+    this.centerCx = 1e9;
+  }
+
   setTunables(t: Partial<WorldGen['t']>) {
     Object.assign(this.gen.t, t);
+    (this.gen as unknown as { edgeCache: Map<string, unknown> }).edgeCache.clear();
     for (const w of this.workers) w.postMessage({ type: 'init', seed: this.gen.seed, tunables: this.gen.t });
   }
 

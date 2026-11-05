@@ -70,7 +70,8 @@ export interface SetPiece {
   y: number;
   z: number;
   yaw: number; // heading of road (radians, atan2(tx, tz))
-  side: number; // -1/1 for roadside pieces
+  side: number; // -1/1 for roadside pieces (right-positive)
+  halfW: number;
   param: number; // deterministic random [0,1)
 }
 

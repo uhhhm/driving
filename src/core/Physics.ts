@@ -11,7 +11,7 @@ export const G_BREAKABLE = 0x0010;
 /** membership (what I am) / filter (what I collide with) */
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 
-export type ColliderKind = 'terrain' | 'road' | 'static' | 'breakable' | 'traffic' | 'debris' | 'car' | 'setpiece';
+export type ColliderKind = 'police' | 'terrain' | 'road' | 'static' | 'breakable' | 'traffic' | 'debris' | 'car' | 'setpiece';
 
 export interface ColliderInfo {
   kind: ColliderKind;

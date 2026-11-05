@@ -498,6 +498,7 @@ export class WorldGen {
         z: Z[q],
         yaw: Math.atan2(TX[q], TZ[q]),
         side,
+        halfW: ROAD_HALF_W[type],
         param: rng.next(),
       });
     };
@@ -517,10 +518,11 @@ export class WorldGen {
         addPiece('loop', q);
         noTraffic = true;
         for (let o = -20; o <= 20; o++) flags[clamp(q + o, 0, n - 1)] |= RoadFlag.Stunt;
-      } else if (type !== RoadType.Avenue && sp < 0.4) {
+      } else if (type !== RoadType.Avenue && sp < 0.32) {
         const q = straightAt(Math.floor(n * 0.3), Math.floor(n * 0.7));
         flatten(q, 14);
         addPiece('ramp', q);
+        noTraffic = true;
         for (let o = -10; o <= 10; o++) flags[clamp(q + o, 0, n - 1)] |= RoadFlag.Stunt;
       } else if (sp < 0.52) {
         const q = straightAt(Math.floor(n * 0.25), Math.floor(n * 0.75));
@@ -1050,6 +1052,34 @@ export class WorldGen {
         }
       }
     }
+    // ---- set-piece props (smashables live in the normal prop pipeline) ----
+    for (const e of edges)
+      for (const sp of e.setPieces) {
+        if (sp.x < x0 || sp.x >= x0 + CHUNK || sp.z < z0 || sp.z >= z0 + CHUNK) continue;
+        if (lod === 2) continue;
+        const fx = Math.sin(sp.yaw), fz = Math.cos(sp.yaw);
+        const rx = -fz, rz = fx;
+        const at = (f: number, r: number, type: Prop, yaw = sp.yaw, s = 1, y = sp.y + 0.12) =>
+          push(type, sp.x + fx * f + rx * r, y, sp.z + fz * f + rz * r, yaw, s, s, s);
+        const r2 = new RNG(hash4(this.seed, Math.floor(sp.x), Math.floor(sp.z), 31));
+        if (sp.kind === 'gas') {
+          const off = sp.side * (e.halfW + 15);
+          for (const df of [-5, 5]) for (const dr of [-3.5, 3.5]) at(df, off + dr, Prop.Pump, sp.yaw + Math.PI / 2);
+          for (let k = 0; k < 6; k++) at(-11 + r2.range(-1, 1), off + sp.side * (6 + k * 0.9), Prop.Barrel, r2.next() * 6);
+          for (let k = 0; k < 4; k++) at(10 + r2.range(-1, 1), off + sp.side * (5 + k * 1.3), Prop.Crate, r2.next() * 6);
+        } else if (sp.kind === 'construction') {
+          // close one lane with cones, barriers in the shoulder, junk everywhere
+          const lane = sp.side * e.halfW * 0.5;
+          for (let k = -9; k <= 9; k++) at(k * 3, lane - sp.side * (e.halfW * 0.45) + (Math.abs(k) > 7 ? (Math.abs(k) - 7) * sp.side * 1.6 : 0), Prop.Cone, r2.next() * 6);
+          for (let k = -2; k <= 2; k++) at(k * 2.6, lane, Prop.Barrier);
+          for (let k = 0; k < 5; k++) at(r2.range(-14, 14), sp.side * (e.halfW + 4 + r2.range(0, 6)), Prop.Crate, r2.next() * 6, 1, sampleH(sp.x, sp.z));
+          for (let k = 0; k < 3; k++) at(r2.range(-14, 14), sp.side * (e.halfW + 3 + r2.range(0, 5)), Prop.Barrel, r2.next() * 6, 1, sampleH(sp.x, sp.z));
+        } else if (sp.kind === 'ramp') {
+          for (const s2 of [-1, 1]) for (let k = 0; k < 3; k++) at(-14 - k * 4, s2 * 4.2, Prop.Cone, 0);
+        } else if (sp.kind === 'loop') {
+          for (const s2 of [-1, 1]) for (let k = 0; k < 4; k++) at(-30 - k * 5, s2 * (e.halfW - 0.8), Prop.Cone, 0);
+        }
+      }
     return new Float32Array(out);
   }
 

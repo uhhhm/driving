@@ -1,27 +1,44 @@
 // Orchestrates all systems: fixed-step physics, streaming world, rendering, gameplay.
 import * as THREE from 'three';
-import { Physics, RAPIER } from './Physics';
+import { Physics } from './Physics';
 import { Input, type Controls } from './Input';
 import { bus } from './events';
-import { clamp, damp, lerp } from './rng';
+import { clamp, damp } from './rng';
 import { ChunkManager } from '../world/ChunkManager';
 import { Sky } from '../world/Sky';
+import { Weather } from '../world/Weather';
+import { SetPieces } from '../world/SetPieces';
+import { Water } from '../world/Water';
 import { worldUniforms } from '../world/Materials';
-import { CHUNK, BIOME_NAMES } from '../world/types';
+import { BIOME_NAMES } from '../world/types';
+import type { Tunables } from '../world/WorldGen';
 import { Vehicle } from '../vehicle/Vehicle';
 import { CarModel } from '../vehicle/CarModel';
-import { CARS, carById, applyUpgrades, type CarSpec } from '../vehicle/VehicleDefs';
+import { carById, applyUpgrades, type CarSpec } from '../vehicle/VehicleDefs';
 import { CameraRig } from '../camera/CameraRig';
 import { HUD } from '../ui/HUD';
-
-const _v = new THREE.Vector3();
-const _q = new THREE.Quaternion();
+import { PostFX, EnvBaker } from '../fx/PostFX';
+import { Particles } from '../fx/Particles';
+import { SkidMarks } from '../fx/SkidMarks';
+import { VehicleFX } from '../fx/VehicleFX';
+import { Headlights } from '../fx/Headlights';
+import { audio } from '../audio/AudioEngine';
+import { Impacts } from '../game/Impacts';
+import { Traffic } from '../game/Traffic';
+import { Score } from '../game/Score';
+import { Events } from '../game/Events';
+import { Police } from '../game/Police';
+import { Ghost } from '../game/Ghost';
+import { PhotoMode } from '../game/PhotoMode';
+import { Save } from '../game/Save';
+import { paintColor } from '../ui/Menu';
 
 export interface PlayerCar {
   vehicle: Vehicle;
   model: CarModel;
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
+  paint: number;
 }
 
 export class Game {
@@ -31,8 +48,25 @@ export class Game {
   input = new Input();
   chunks!: ChunkManager;
   sky!: Sky;
+  weather!: Weather;
+  water!: Water;
+  setPieces!: SetPieces;
   rig: CameraRig;
   hud!: HUD;
+  postfx!: PostFX;
+  env!: EnvBaker;
+  particles!: Particles;
+  skids!: SkidMarks;
+  vfx!: VehicleFX;
+  headlights!: Headlights;
+  impacts!: Impacts;
+  traffic!: Traffic;
+  score!: Score;
+  events!: Events;
+  police!: Police;
+  ghost!: Ghost;
+  photo!: PhotoMode;
+  save: Save;
   player!: PlayerCar;
   seed = 1;
   seedText = 'SEEDRUNNER';
@@ -47,18 +81,21 @@ export class Game {
   private fpsAcc = 0;
   private fpsFrames = 0;
   weatherGrip = 1;
+  weatherWet = 0;
   iceRoads = 0;
-  // hooks for systems added later
-  systems: { update(dt: number, realDt: number): void }[] = [];
-  fixedSystems: { fixedUpdate(dt: number): void }[] = [];
-  render: (() => void) | null = null;
+  sirenLevel = 0;
+  sirenDist = 1e9;
+  quality = 1;
   private slowMoTimer = 0;
   currentBiome = -1;
-  biomeWeights = new Float32Array(4);
+  biomeWeights = new Float32Array([1, 0, 0, 0]);
+  private wreckTimer = 0;
+  private waterTimer = 0;
+  onPause: (() => void) | null = null;
+  started = false;
 
   constructor(public container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false, depth: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -66,6 +103,7 @@ export class Game {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
     this.rig = new CameraRig(window.innerWidth / window.innerHeight);
+    this.save = new Save();
     window.addEventListener('resize', () => this.onResize());
   }
 
@@ -73,34 +111,101 @@ export class Game {
     const w = window.innerWidth;
     const h = window.innerHeight;
     this.renderer.setSize(w, h);
+    this.postfx?.setSize(w, h);
     this.rig.camera.aspect = w / h;
     this.rig.camera.updateProjectionMatrix();
-    this.onResizeHook?.(w, h);
+    this.particles?.setScale(h * this.renderer.getPixelRatio(), this.rig.camera.fov);
   }
-  onResizeHook?: (w: number, h: number) => void;
 
-  async init(seedText: string, carId: string) {
+  async init(seedText: string, carId: string, paint: number) {
     await this.physics.init();
     this.seedText = seedText;
     this.seed = hashSeed(seedText);
     this.chunks = new ChunkManager(this.seed, this.physics, this.scene);
+    this.setPieces = new SetPieces(this.physics, this.scene);
+    this.chunks.setPieces = this.setPieces;
     this.sky = new Sky(this.scene);
+    this.water = new Water(this.scene);
+    this.postfx = new PostFX(this.renderer, this.scene, this.rig.camera);
+    this.env = new EnvBaker(this.renderer, this.scene, this.sky.mesh);
+    this.particles = new Particles(this.scene);
+    this.particles.heightAt = (x, z) => this.chunks.heightAt(x, z);
+    this.skids = new SkidMarks(this.scene);
     this.hud = new HUD(this);
+    this.vfx = new VehicleFX(this, this.particles, this.skids);
+    this.headlights = new Headlights(this.scene);
+    this.impacts = new Impacts(this, this.particles);
+    this.traffic = new Traffic(this, this.impacts, this.particles);
+    this.score = new Score(this);
+    this.events = new Events(this);
+    this.score.onTrick = (name, pts, color) => {
+      this.hud.popTrick(`${name} +${pts.toLocaleString()}`, color);
+      this.events.onTrick(name, pts);
+    };
+    this.score.onBank = (pts) => this.save.addCredits(pts);
+    this.police = new Police(this, this.particles);
+    this.weather = new Weather(this);
+    this.photo = new PhotoMode(this);
+    this.setQuality(this.save.data.settings.quality);
+    this.impacts.crashCamEnabled = this.save.data.settings.crashCam;
+    audio.setVolume(this.save.data.settings.volume);
+
     const spawn = this.findSpawn();
     this.chunks.warmup(spawn.pos.x, spawn.pos.z);
-    this.spawnPlayer(carById(carId), spawn.pos, spawn.yaw);
+    this.spawnPlayer(carById(carId), spawn.pos, spawn.yaw, paint);
+    this.ghost = new Ghost(this);
     this.rig.snap(this.player.vehicle);
+    this.onResize();
+    this.env.update(0, true);
+    this.chunks.update(spawn.pos.x, spawn.pos.z, 0, 0, true);
+
+    bus.on('wrecked', () => {
+      if (this.wreckTimer > 0) return;
+      this.wreckTimer = 2.6;
+      this.hud.center('WRECKED', 2.2, 'danger');
+      this.slowMo(0.3, 1.5);
+      this.impacts.explode(this.player.vehicle.pos.clone(), 0.5);
+    });
+    bus.on('crash', (e) => {
+      if (e.impulse > 10) this.input.rumble(1, 1, 300);
+    });
+  }
+
+  setQuality(q: number) {
+    this.quality = q;
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer.setPixelRatio(q === 0 ? Math.min(dpr, 0.75) : q === 1 ? Math.min(dpr, 1) : Math.min(dpr, 1.5));
+    this.renderer.shadowMap.enabled = q > 0;
+    this.sky.sun.castShadow = q > 0;
+    this.sky.sun.shadow.mapSize.set(q === 2 ? 2048 : 1024, q === 2 ? 2048 : 1024);
+    this.sky.sun.shadow.map?.dispose();
+    this.sky.sun.shadow.map = null;
+    this.chunks.viewRadius = q === 0 ? 4 : q === 1 ? 5 : 6;
+    this.chunks.lod1Radius = q === 0 ? 2 : q === 1 ? 3 : 4;
+    this.particles.quality = q === 0 ? 0.4 : q === 1 ? 0.75 : 1;
+    this.traffic.maxCars = q === 0 ? 20 : q === 1 ? 28 : 34;
+    this.onResize();
+  }
+
+  regenerateWorld(t: Tunables) {
+    const v = this.player.vehicle;
+    this.traffic.clear();
+    this.police.clear();
+    this.impacts.clear();
+    this.chunks.setTunables(t);
+    this.chunks.reset();
+    this.chunks.ensureSync(v.pos.x, v.pos.z);
+    this.resetToRoad();
   }
 
   findSpawn(): { pos: THREE.Vector3; yaw: number } {
     const gen = this.chunks.gen;
-    // search outward for a decent straight edge
     for (let r = 0; r < 6; r++)
       for (let j = -r; j <= r; j++)
         for (let i = -r; i <= r; i++) {
           for (const d of [0, 1]) {
             const e = gen.edge(i, j, d);
-            if (!e || e.n < 40) continue;
+            if (!e || e.n < 40 || e.noTraffic) continue;
             const q = 18;
             if (e.flags[q] & 3) continue;
             const yaw = Math.atan2(e.tx[q], e.tz[q]);
@@ -111,18 +216,22 @@ export class Game {
     return { pos: new THREE.Vector3(0, gen.baseHeight(0, 0) + 2, 0), yaw: 0 };
   }
 
-  spawnPlayer(spec: CarSpec, pos: THREE.Vector3, yaw: number, paint?: number) {
+  spawnPlayer(base: CarSpec, pos: THREE.Vector3, yaw: number, paint = 0) {
     if (this.player) {
       this.player.vehicle.dispose();
       this.scene.remove(this.player.model.root);
       this.player.model.dispose();
     }
+    const spec = applyUpgrades({ ...base }, this.save.upgrades(base.id));
     const vehicle = new Vehicle(this.physics, spec, pos, yaw);
-    const model = new CarModel(spec, { paint, plate: this.seedText });
+    vehicle.tune.assistMul = this.save.data.settings.assists;
+    const model = new CarModel(spec, { paint: paintColor(base, paint), plate: this.seedText });
     this.scene.add(model.root);
-    this.player = { vehicle, model, prevPos: vehicle.pos.clone(), prevQuat: vehicle.quat.clone() };
+    this.player = { vehicle, model, prevPos: vehicle.pos.clone(), prevQuat: vehicle.quat.clone(), paint };
     vehicle.onShift = (gear, up) => bus.emit('shift', { gear, up });
     vehicle.onBoost = (on) => bus.emit(on ? 'boostStart' : 'boostEnd', {});
+    audio.setCar(spec.cylinders, spec.enginePitch);
+    this.headlights?.attach(model);
   }
 
   /** Put the car back on the nearest road. */
@@ -136,24 +245,34 @@ export class Game {
     const e = near.edge;
     const q = Math.min(e.n - 2, near.idx);
     let yaw = Math.atan2(e.tx[q], e.tz[q]);
-    // keep travelling direction
-    if (v.fwd.x * e.tx[q] + v.fwd.z * e.tz[q] < 0) yaw += Math.PI;
-    const lat = clamp(near.lateral, -e.halfW * 0.6, e.halfW * 0.6);
+    let dir = 1;
+    if (v.fwd.x * e.tx[q] + v.fwd.z * e.tz[q] < 0) {
+      yaw += Math.PI;
+      dir = -1;
+    }
+    const lat = e.halfW * 0.4 * dir;
     const pos = new THREE.Vector3(e.x[q] - e.tz[q] * lat, e.h[q] + 1.0, e.z[q] + e.tx[q] * lat);
+    if (!this.chunks.ready(pos.x, pos.z)) this.chunks.ensureSync(pos.x, pos.z);
     v.teleport(pos, yaw, keepSpeed ? Math.min(25, v.speedAbs) : 0);
+    v.health = 100;
+    this.player.model.repair();
     this.player.prevPos.copy(v.pos);
     this.player.prevQuat.copy(v.quat);
+    this.rig.crash = null;
     this.rig.snap(v);
+    this.impacts.invulnerable = 1.5;
     bus.emit('reset', {});
   }
 
   slowMo(scale: number, seconds: number) {
+    if (scale > this.targetTimeScale && this.slowMoTimer > 0) return; // keep the stronger slow-mo
     this.targetTimeScale = scale;
-    this.timeScale = scale;
+    this.timeScale = Math.min(this.timeScale, scale);
     this.slowMoTimer = seconds;
   }
 
   start() {
+    this.started = true;
     this.last = performance.now();
     const loop = () => {
       requestAnimationFrame(loop);
@@ -173,64 +292,129 @@ export class Game {
       this.fpsAcc = 0;
       this.fpsFrames = 0;
     }
-
-    // time scale (slow-mo) recovers in real time
     if (this.slowMoTimer > 0) {
       this.slowMoTimer -= realDt;
       if (this.slowMoTimer <= 0) this.targetTimeScale = 1;
     }
-    this.timeScale = damp(this.timeScale, this.targetTimeScale, 5, realDt);
+    this.timeScale = damp(this.timeScale, this.targetTimeScale, 6, realDt);
     const dt = this.paused ? 0 : realDt * this.timeScale;
 
     const v = this.player.vehicle;
     this.controls = this.input.poll(realDt, v.kmh);
+    const ctl = this.controls;
+    if (ctl.pause && !this.photo.active) this.onPause?.();
+    if (ctl.photo) this.photo.toggle();
+    if (!this.paused) {
+      if (ctl.camera) this.rig.cycle();
+      if (ctl.reset) this.resetToRoad();
+      if (ctl.horn && !this.hornHeld) audio.horn();
+      this.hornHeld = ctl.horn;
+    }
+    this.hud.minimap.markers.length = 0;
+
     const tp = performance.now();
-    // fixed step physics
     const fdt = this.physics.fixedDt;
     this.acc += dt;
     let steps = 0;
-    while (this.acc >= fdt && steps < 8) {
+    while (this.acc >= fdt && steps < 6) {
       this.player.prevPos.copy(v.pos);
       this.player.prevQuat.copy(v.quat);
       this.fixedStep(fdt);
       this.acc -= fdt;
       steps++;
     }
-    if (steps === 8) this.acc = 0;
+    if (steps === 6) this.acc = 0;
     this.stats.physMs = performance.now() - tp;
     v.syncState();
     const alpha = this.acc / fdt;
 
-    // render pose interpolation
     const m = this.player.model;
     m.root.position.lerpVectors(this.player.prevPos, v.pos, alpha);
     m.root.quaternion.slerpQuaternions(this.player.prevQuat, v.quat, alpha);
-    this.updateWheels(realDt);
+    this.updateWheels();
 
-    // world streaming
     this.chunks.update(v.pos.x, v.pos.z, v.vel.x, v.vel.z);
     this.simTime += dt;
     worldUniforms.uTime.value = this.simTime;
     this.updateBiome(realDt);
-    this.sky.update(dt, v.pos);
-    this.chunks.props.setNight(this.sky.state.night);
-    m.setHeadlights(this.sky.state.night);
+    if (!this.photo.active) this.sky.update(dt, v.pos);
+    const night = this.sky.state.night;
+    this.chunks.props.setNight(night);
+    this.water.update(this.simTime, v.pos, this.sky.state.fogColor, this.sky.state.sunDir, night);
+    if (dt > 0) {
+      this.weather.update(dt);
+      this.traffic.update(dt);
+      this.police.update(dt);
+      this.score.update(dt);
+      this.events.update(dt);
+      this.ghost.update(dt);
+      this.vfx.update(dt, realDt);
+      this.particles.update(dt);
+      this.impacts.update(dt);
+      this.checkHazards(dt);
+    }
+    this.headlights.update(night, this.weather.fog, this.player.model, v);
+    this.env.update(realDt);
 
-    for (const s of this.systems) s.update(dt, realDt);
-
-    const ground = this.chunks.heightAt(this.rig.camera.position.x, this.rig.camera.position.z);
-    this.rig.lookBack = !!this.controls.lookBack;
-    this.rig.update(dt, realDt, v, v.boosting, ground);
+    const camPos = this.rig.camera.position;
+    const ground = this.chunks.heightAt(camPos.x, camPos.z);
+    this.rig.lookBack = !!ctl.lookBack;
+    if (this.photo.active) this.photo.update(realDt);
+    else this.rig.update(dt, realDt, v, v.boosting, Math.max(ground, this.water.level + 0.3));
     this.hud.update(realDt);
-
+    this.postfx.update(realDt, {
+      speed: this.rig.speedFx * (this.photo.active ? 0 : 1),
+      biome: this.biomeWeights,
+      night,
+      damage: clamp((60 - v.health) / 60, 0, 1),
+      time: this.simTime,
+      letterbox: this.rig.crash ? 0.09 : 0,
+    });
     const tr = performance.now();
-    if (this.render) this.render();
-    else this.renderer.render(this.scene, this.rig.camera);
+    this.postfx.render(realDt);
     this.stats.renderMs = performance.now() - tr;
     this.stats.frameMs = performance.now() - now;
   }
+  private hornHeld = false;
 
-  /** Deterministic headless simulation for tests/tuning. ctl(t) returns the controls at sim time t. */
+  private checkHazards(dt: number) {
+    const v = this.player.vehicle;
+    if (this.wreckTimer > 0) {
+      this.wreckTimer -= dt / Math.max(0.3, this.timeScale);
+      if (this.wreckTimer <= 0) this.resetToRoad();
+    }
+    if (v.pos.y < this.water.level - 0.6) {
+      if (this.waterTimer === 0) {
+        this.particles.splash(v.pos.clone().setY(this.water.level), 60);
+        audio.crash(0.5);
+        this.hud.center('SPLASH', 1.2);
+        this.score.lose();
+      }
+      this.waterTimer += dt;
+      v.body.setLinearDamping(3);
+      if (this.waterTimer > 1.6) {
+        v.body.setLinearDamping(0.02);
+        this.waterTimer = 0;
+        this.resetToRoad();
+      }
+    } else if (this.waterTimer > 0) {
+      this.waterTimer = 0;
+      v.body.setLinearDamping(0.02);
+    }
+    if (v.pos.y < -80) this.resetToRoad();
+  }
+
+  fixedStep(dt: number) {
+    const v = this.player.vehicle;
+    v.step(dt, this.controls!, { weatherGrip: this.weatherGrip, iceRoads: this.iceRoads });
+    this.traffic.fixedUpdate(dt);
+    this.police.fixedUpdate(dt);
+    this.impacts.preStep();
+    this.physics.world.step(this.physics.events);
+    this.impacts.postStep(dt);
+  }
+
+  /** Deterministic headless simulation for tests/tuning. */
   simulate(seconds: number, ctl: (t: number, v: Vehicle) => Partial<Controls>, sample?: (t: number, v: Vehicle) => void, every = 0.25) {
     const fdt = this.physics.fixedDt;
     const v = this.player.vehicle;
@@ -245,6 +429,10 @@ export class Game {
       this.player.prevQuat.copy(v.quat);
       this.fixedStep(fdt);
       v.syncState();
+      if (i % 12 === 0) {
+        this.score.update(fdt * 12);
+        this.chunks.update(v.pos.x, v.pos.z, v.vel.x, v.vel.z);
+      }
       if (sample && t >= nextSample) {
         sample(t, v);
         nextSample += every;
@@ -252,15 +440,7 @@ export class Game {
     }
   }
 
-  fixedStep(dt: number) {
-    const v = this.player.vehicle;
-    const ctl = this.controls!;
-    v.step(dt, ctl, { weatherGrip: this.weatherGrip, iceRoads: this.iceRoads });
-    for (const s of this.fixedSystems) s.fixedUpdate(dt);
-    this.physics.world.step(this.physics.events);
-  }
-
-  private updateWheels(dt: number) {
+  private updateWheels() {
     const v = this.player.vehicle;
     const m = this.player.model;
     const spec = v.spec;
@@ -274,14 +454,17 @@ export class Game {
     }
   }
 
+  private _w = new Float32Array(4);
   private updateBiome(dt: number) {
     const v = this.player.vehicle;
     const gen = this.chunks.gen;
-    const cellId = gen.biomeWeights(v.pos.x, v.pos.z, this.biomeWeights);
-    this.sky.cityAmount = damp(this.sky.cityAmount, this.biomeWeights[2] > 0.5 ? 1 : this.biomeWeights[2] * 1.4, 1.2, dt);
+    const w = this._w;
+    const cellId = gen.biomeWeights(v.pos.x, v.pos.z, w);
+    for (let b = 0; b < 4; b++) this.biomeWeights[b] = damp(this.biomeWeights[b], w[b], 1.5, dt);
+    this.sky.cityAmount = damp(this.sky.cityAmount, w[2] > 0.5 ? 1 : w[2] * 1.4, 1.2, dt);
     let best = 0;
-    for (let b = 1; b < 4; b++) if (this.biomeWeights[b] > this.biomeWeights[best]) best = b;
-    if (cellId !== this.currentBiome && this.biomeWeights[best] > 0.75) {
+    for (let b = 1; b < 4; b++) if (w[b] > w[best]) best = b;
+    if (cellId !== this.currentBiome && w[best] > 0.75) {
       const first = this.currentBiome === -1;
       this.currentBiome = cellId;
       const name = regionName(this.seed, cellId, best);
@@ -324,4 +507,3 @@ export function regionName(seed: number, cellId: number, biome: number): string 
   if (biome === 2 && r() < 0.4) return `Neo ${s}`;
   return `${s} ${suf}`;
 }
-

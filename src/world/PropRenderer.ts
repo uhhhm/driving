@@ -157,7 +157,7 @@ export class PropRenderer {
       fragmentShader: /* glsl */ `
         uniform float uNight; varying float vH; varying vec3 vN; varying vec3 vV;
         void main(){ float edge = pow(1.0 - abs(dot(vN, vV)), 1.5);
-          float a = (1.0 - edge) * mix(0.02, 0.16, vH) * uNight;
+          float a = (1.0 - edge) * mix(0.01, 0.07, vH) * uNight;
           gl_FragColor = vec4(vec3(1.0,0.8,0.55)*a, 1.0); }`,
     });
     this.pools = this.makeSlotRaw(this.poolGeo, this.poolMat, 64, false);
