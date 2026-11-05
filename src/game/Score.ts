@@ -39,10 +39,10 @@ export class Score {
 
   constructor(private game: Game) {
     bus.on('nearMiss', (e) => {
-      const close = Math.max(0, 1.6 - e.dist);
-      const pts = Math.round((300 + e.speed * 6) * (1 + close));
+      const close = Math.max(0, 1.5 - e.dist) / 1.5; // 0..1
+      const pts = Math.round((250 + e.speed * 8) * (1 + close * 2));
       this.stats.nearMisses++;
-      this.award(close > 1 ? 'INSANE NEAR MISS' : close > 0.5 ? 'CLOSE CALL' : 'NEAR MISS', pts, '#4dfff0', 1);
+      this.award(close > 0.75 ? 'INSANE NEAR MISS' : close > 0.4 ? 'CLOSE CALL' : 'NEAR MISS', pts, '#4dfff0', 1);
       game.slowMo(0.55, 0.18);
     });
     bus.on('smash', (e) => {

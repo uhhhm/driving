@@ -20,7 +20,7 @@ export class Headlights {
       vertexShader: `varying float vT; varying vec3 vN; varying vec3 vV;
         void main(){ vT = uv.y; vec4 wp = modelMatrix*vec4(position,1.0); vN = normalize(mat3(modelMatrix)*normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix*viewMatrix*wp; }`,
       fragmentShader: `uniform float uI; varying float vT; varying vec3 vN; varying vec3 vV;
-        void main(){ float e = 1.0 - pow(abs(dot(vN, vV)), 0.8); float a = pow(vT, 2.2) * (1.0 - e) * uI * 0.22; gl_FragColor = vec4(vec3(1.0,0.95,0.82)*a, 1.0); }`,
+        void main(){ float e = 1.0 - pow(abs(dot(vN, vV)), 0.8); float a = pow(vT, 2.6) * (1.0 - e) * uI * 0.12; gl_FragColor = vec4(vec3(1.0,0.95,0.82)*a, 1.0); }`,
     });
   }
   attach(model: CarModel) {
@@ -38,7 +38,7 @@ export class Headlights {
     }
   }
   update(night: number, fog: number, model: CarModel, v: Vehicle) {
-    const on = Math.max(night, fog * 0.6);
+    const on = Math.max(night, fog * night * 0.6, fog > 0.5 ? (fog - 0.5) * 0.6 : 0);
     this.spot.intensity = on * 260;
     this.spot.visible = on > 0.05;
     const p = model.root.position;

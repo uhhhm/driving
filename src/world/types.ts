@@ -125,6 +125,7 @@ export interface ChunkData {
   props: Float32Array; // PROP_STRIDE per prop
   road: MeshBuffers | null; // drivable road surface (uv.x across, uv.y along, color.r = type, color.g = wet-able)
   structure: MeshBuffers | null; // bridges, pillars, rails, tunnel shells (concrete)
+  rock: MeshBuffers | null; // rock skin over tunnels
   roadCollider: MeshBuffers | null; // what the car can drive on/hit (road + rails + tunnel interior)
   tunnelLights: Float32Array; // x,y,z triples
   setPieces: SetPiece[];

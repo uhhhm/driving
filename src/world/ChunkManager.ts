@@ -78,6 +78,7 @@ export class ChunkManager {
   terrainMat = makeTerrainMaterial();
   roadMat = makeRoadMaterial();
   concreteMat = makeConcreteMaterial();
+  rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
   tunnelLightMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.8, 0.5).multiplyScalar(4) });
   props: PropRenderer;
   viewRadius = 6;
@@ -358,6 +359,13 @@ export class ChunkManager {
     }
     if (d.structure) {
       const m = this.meshFrom(d.structure, this.concreteMat);
+      m.receiveShadow = true;
+      m.castShadow = d.lod === 0;
+      m.matrixAutoUpdate = false;
+      c.group.add(m);
+    }
+    if (d.rock) {
+      const m = this.meshFrom(d.rock, this.rockMat);
       m.receiveShadow = true;
       m.castShadow = d.lod === 0;
       m.matrixAutoUpdate = false;

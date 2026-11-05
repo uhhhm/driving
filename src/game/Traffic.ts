@@ -369,11 +369,13 @@ export class Traffic {
     const relX = Math.abs(_v.dot(v.right));
     const dy = Math.abs(_v.y);
     const [hx, , hz] = KIND_DIMS[c.kind];
-    if (c.prevRelZ > 0 && relZ <= 0 && relX < hx + 3.6 && relX > hx + 0.6 && dy < 3 && v.speedAbs > 15 && c.nearMissCd <= 0) {
-      const gap = relX - hx - 0.9;
+    const myHalf = v.spec.half[0];
+    const gap = relX - hx - myHalf;
+    const relSpeed = Math.abs(v.vel.dot(v.fwd) - c.speed * (Math.sin(c.yaw) * v.fwd.x + Math.cos(c.yaw) * v.fwd.z));
+    if (c.prevRelZ > 0 && relZ <= 0 && gap < 1.5 && gap > -0.1 && dy < 3 && relSpeed > 10 && v.speedAbs > 12 && c.nearMissCd <= 0 && c.hitCd <= 0) {
       c.nearMissCd = 3;
-      bus.emit('nearMiss', { dist: Math.max(0.1, gap), speed: v.speedAbs });
-      audio.whoosh(Math.min(1, v.speedAbs / 40));
+      bus.emit('nearMiss', { dist: Math.max(0.05, gap), speed: relSpeed });
+      audio.whoosh(Math.min(1, relSpeed / 40));
       if (c.honkCd <= 0 && Math.random() < 0.6) {
         c.honkCd = 5;
         setTimeout(() => audio.trafficHonk(Math.max(5, v.pos.distanceTo(c.pos))), 120);

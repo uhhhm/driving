@@ -855,6 +855,7 @@ export class WorldGen {
       cx, cz, lod, res, heights, normals, colors, surface, minH, maxH, props,
       road: roadMeshes.road,
       structure: roadMeshes.structure,
+      rock: roadMeshes.rock,
       roadCollider: roadMeshes.collider,
       tunnelLights: roadMeshes.lights,
       setPieces, biomeMix,
@@ -1133,6 +1134,7 @@ export class WorldGen {
 
     const road = new MeshBuilder(true);
     const struct = new MeshBuilder(false);
+    const rock = new MeshBuilder(true);
     const col = new MeshBuilder(false);
     const lights: number[] = [];
     const stepQ = lod === 2 ? 3 : 1;
@@ -1144,7 +1146,7 @@ export class WorldGen {
         const mx = (e.x[q] + e.x[q2]) / 2;
         const mz = (e.z[q] + e.z[q2]) / 2;
         if (!inChunk(mx, mz)) continue;
-        this.emitRoadSegment(e, q, q2, road, struct, lod === 0 ? col : null, lights);
+        this.emitRoadSegment(e, q, q2, road, struct, rock, lod === 0 ? col : null, lights);
       }
     }
     // junction pads for nodes in this chunk
@@ -1187,12 +1189,13 @@ export class WorldGen {
     return {
       road: road.build(),
       structure: struct.build(),
+      rock: rock.build(),
       collider: lod === 0 ? col.build() : null,
       lights: new Float32Array(lights),
     };
   }
 
-  private emitRoadSegment(e: RoadEdge, q0: number, q1: number, road: MeshBuilder, struct: MeshBuilder, col: MeshBuilder | null, lights: number[]) {
+  private emitRoadSegment(e: RoadEdge, q0: number, q1: number, road: MeshBuilder, struct: MeshBuilder, rock: MeshBuilder, col: MeshBuilder | null, lights: number[]) {
     const hw = e.halfW;
     const typeCode = e.type === RoadType.Dirt ? 1 : e.type === RoadType.Avenue ? 0.75 : e.type === RoadType.Mountain ? 0.25 : 0.5;
     const cross = (q: number, lat: number, out: number[]) => {
@@ -1295,19 +1298,23 @@ export class WorldGen {
           struct.vert(px, py, pz, -rx * Math.cos(a), -Math.sin(a), -rz * Math.cos(a));
         }
       }
-      // outer shell too (so it isn't see-through from outside): offset outward
+      // outer rock skin so the tunnel reads as part of the hillside
       for (let k = 0; k < segs; k++) struct.quad(sb + k, sb + segs + 1 + k, sb + segs + 2 + k, sb + k + 1);
-      const ob = struct.vcount;
+      const pal = PAL[e.biome] ?? PAL[0];
+      const ob = rock.vcount;
       for (const q of [q0, q1]) {
         const rx = -e.tz[q], rz = e.tx[q];
         for (let k = 0; k <= segs; k++) {
           const a = (k / segs) * Math.PI;
-          const lx = Math.cos(a) * (r + 3.5);
-          const ly = Math.sin(a) * ((r + 3.5) * 0.85);
-          struct.vert(e.x[q] + rx * lx, e.h[q] + ly - 0.5, e.z[q] + rz * lx, rx * Math.cos(a), Math.sin(a), rz * Math.cos(a));
+          const bump = 1 + 0.18 * Math.sin(q * 1.7 + k * 2.3) * Math.sin(k * 1.1 + q * 0.6);
+          const rr = (r + 4.5) * bump;
+          const lx = Math.cos(a) * rr * 1.25;
+          const ly = Math.sin(a) * rr * 0.9;
+          const shade = 0.75 + 0.25 * Math.sin(q * 3.1 + k);
+          rock.vert(e.x[q] + rx * lx, e.h[q] + ly - 1.2, e.z[q] + rz * lx, rx * Math.cos(a), Math.sin(a), rz * Math.cos(a), 0, 0, pal.rock[0] * shade, pal.rock[1] * shade, pal.rock[2] * shade);
         }
       }
-      for (let k = 0; k < segs; k++) struct.quad(ob + k + 1, ob + segs + 2 + k, ob + segs + 1 + k, ob + k);
+      for (let k = 0; k < segs; k++) rock.quad(ob + k + 1, ob + segs + 2 + k, ob + segs + 1 + k, ob + k);
       if (col) {
         const cb = col.vcount;
         for (const q of [q0, q1]) {

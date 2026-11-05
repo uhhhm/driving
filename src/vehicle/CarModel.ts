@@ -312,21 +312,21 @@ export class CarModel {
         break;
       }
       case 'van': {
-        // giant taco on the roof
-        const shell = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.9, 0.9, 1.6, 20, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2),
-          new THREE.MeshStandardMaterial({ color: 0xe8b84a, roughness: 0.8 }),
-        );
-        shell.rotation.x = Math.PI;
+        // giant taco on the roof: a bowl-shaped shell with fillings
         const taco = new THREE.Group();
+        const shell = new THREE.Mesh(
+          new THREE.SphereGeometry(1, 20, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2).scale(1.3, 0.85, 0.32),
+          new THREE.MeshStandardMaterial({ color: 0xe8b84a, roughness: 0.8, side: THREE.DoubleSide }),
+        );
         taco.add(shell);
-        const filling = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.25, 0.3), new THREE.MeshStandardMaterial({ color: 0x3fa63a }));
-        filling.position.y = 0.05;
-        taco.add(filling);
-        taco.position.set(0, 2.6, -0.4);
-        taco.scale.setScalar(0.8);
+        const lettuce = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, 0.42), new THREE.MeshStandardMaterial({ color: 0x3fa63a, roughness: 0.9 }));
+        lettuce.position.y = -0.05;
+        const tomato = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.16, 0.36), new THREE.MeshStandardMaterial({ color: 0xd8321e, roughness: 0.7 }));
+        tomato.position.y = 0.08;
+        taco.add(lettuce, tomato);
+        taco.position.set(0, 3.15, -0.6);
+        taco.rotation.y = Math.PI / 2;
         this.bodyGroup.add(taco);
-        this.parts.push({ name: 'TACO', mesh: shell, health: 50, anchor: new THREE.Vector3(0, 2.6, -0.4), attached: true });
         break;
       }
     }
