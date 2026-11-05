@@ -262,7 +262,7 @@ export class Events {
     const a = this.active;
     if (!a) {
       this.cooldown -= dt;
-      if (this.cooldown <= 0 && !g.police.active) this.start();
+      if (this.cooldown <= 0 && !g.police.active && !g.quietEvents) this.start();
       return;
     }
     const v = g.player.vehicle;

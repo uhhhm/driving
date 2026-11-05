@@ -48,6 +48,7 @@ export interface CarSpec {
   maxSteer: number; // rad
   steerSpeedFalloff: number; // how quickly lock reduces with speed
   driftAssist: number; // 0..1
+  driftAngle: number; // multiplier on the slip angle the drift controller holds
   stability: number; // yaw damping
   downforce: number;
   airControl: number;
@@ -94,6 +95,7 @@ const base: Omit<CarSpec, 'id' | 'name' | 'tagline' | 'style' | 'price' | 'color
   maxSteer: 0.6,
   steerSpeedFalloff: 0.55,
   driftAssist: 0.8,
+  driftAngle: 1,
   stability: 0.6,
   downforce: 1.4,
   airControl: 1,
@@ -119,10 +121,11 @@ export const CARS: CarSpec[] = [
     gripR: 0.98,
     slide: 0.8,
     driftAssist: 1,
-    torque: 480,
+    torque: 440, // less punch than the V8; it wins in the corners
     redline: 8400,
     cylinders: 4,
     enginePitch: 1.25,
+    drag: 0.68,
   },
   {
     ...base,
@@ -143,12 +146,12 @@ export const CARS: CarSpec[] = [
     freq: 1.55,
     zeta: 0.38,
     inertia: [1.3, 1.9, 0.9],
-    torque: 980,
+    torque: 1200, // out-drags everything but the Bolt from 80 up
     redline: 6400,
     gears: [2.9, 1.9, 1.4, 1.1, 0.88, 0.72],
     finalDrive: 3.5,
     gripF: 1.0,
-    gripR: 0.92,
+    gripR: 0.98,
     slide: 0.7,
     brake: 26000,
     drag: 0.7,
@@ -157,6 +160,9 @@ export const CARS: CarSpec[] = [
     enginePitch: 0.62,
     toughness: 1.8,
     boostForce: 0.6,
+    comY: 0.36, // more squat under power = better launch
+    driftAssist: 0.7, // lazier, heavier slides
+    driftAngle: 1.25, // big-angle slides
   },
   {
     ...base,
@@ -181,10 +187,10 @@ export const CARS: CarSpec[] = [
     travel: 0.55,
     freq: 1.35,
     zeta: 0.5,
-    antiRoll: 0.55,
+    antiRoll: 0.35, // soft, rolls into corners
     inertia: [1.3, 1.6, 1.1],
     drive: 'AWD',
-    torque: 1050,
+    torque: 760,
     redline: 5800,
     gears: [3.6, 2.3, 1.6, 1.2, 0.95, 0.78],
     finalDrive: 3.9,
@@ -192,7 +198,7 @@ export const CARS: CarSpec[] = [
     gripR: 0.98,
     slide: 0.78,
     offroad: 1,
-    drag: 0.95,
+    drag: 1.3, // a brick: ~190 km/h
     maxSteer: 0.55,
     driftAssist: 0.6,
     cylinders: 6,
@@ -224,13 +230,13 @@ export const CARS: CarSpec[] = [
     freq: 2.4,
     zeta: 0.3,
     inertia: [0.8, 1.1, 0.8],
-    torque: 260,
+    torque: 165, // the engine is a lawnmower; the jet is the point
     redline: 9000,
     gears: [3.0, 2.0, 1.5, 1.2, 1.0],
     gripF: 1.05,
     gripR: 0.95,
     slide: 0.85,
-    drag: 0.4,
+    drag: 0.55,
     maxSteer: 0.7,
     driftAssist: 0.9,
     boostForce: 1.6,
@@ -280,6 +286,7 @@ export const CARS: CarSpec[] = [
     enginePitch: 1.05,
     boostForce: 0.75,
     toughness: 0.9,
+    offroad: 0, // splitter + slicks: hates grass
   },
   {
     ...base,
@@ -293,26 +300,26 @@ export const CARS: CarSpec[] = [
     mass: 2100,
     half: [1.05, 1.05, 2.5],
     colliderY: 1.45,
-    comY: 0.85,
-    wheelX: 0.92,
+    comY: 0.8,
+    wheelX: 0.98,
     wheelZf: 1.65,
     wheelZr: -1.6,
     wheelY: 0.6,
     wheelR: 0.4,
     wheelW: 0.28,
     restLen: 0.45,
-    travel: 0.32,
-    freq: 1.45,
+    travel: 0.42, // long travel + soft bars = huge lean
+    freq: 1.25,
     zeta: 0.4,
-    antiRoll: 0.2,
+    antiRoll: 0.12,
     inertia: [1.2, 1.5, 0.8],
     drive: 'FWD',
     torque: 820,
     redline: 5600,
     gears: [3.4, 2.1, 1.45, 1.1, 0.86],
     finalDrive: 3.9,
-    gripF: 1.0,
-    gripR: 0.95,
+    gripF: 0.9, // understeery van tyres (also keeps it below the rollover limit with grip upgrades)
+    gripR: 0.92,
     slide: 0.78,
     drag: 1.05,
     maxSteer: 0.55,

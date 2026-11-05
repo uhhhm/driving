@@ -2,6 +2,7 @@
 import { CARS, type CarSpec } from '../vehicle/VehicleDefs';
 import { PAINTS, UPGRADE_COST, type Save } from '../game/Save';
 import type { Upgrades } from '../vehicle/VehicleDefs';
+import { HANDLING_STATS } from '../vehicle/HandlingStats';
 
 export interface MenuResult {
   seed: string;
@@ -10,13 +11,8 @@ export interface MenuResult {
 }
 
 const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
-const STAT = (c: CarSpec) => ({
-  POWER: Math.min(1, c.torque / c.mass / 0.7),
-  GRIP: Math.min(1, (c.gripF + c.gripR - 1.6) / 0.9),
-  DRIFT: Math.min(1, c.slide * c.driftAssist * 1.1),
-  WEIGHT: Math.min(1, c.mass / 2200),
-  BOOST: Math.min(1, (c.boostForce * c.boostCapacity) / 8),
-});
+// Garage bars come from measured handling (scripts/handling.ts --write), not guesses from the spec.
+const STAT = (c: CarSpec) => HANDLING_STATS[c.id] ?? HANDLING_STATS.kitsune;
 
 const randomSeed = () => {
   const words = ['NEON', 'DUST', 'APEX', 'GHOST', 'VOLT', 'RIDGE', 'TIDE', 'EMBER', 'NOVA', 'RUST', 'COBALT', 'ZEN', 'FURY', 'MIRAGE', 'TURBO', 'ORBIT'];
@@ -49,19 +45,42 @@ export class TitleMenu {
     this.render();
   }
 
-  open(): Promise<MenuResult> {
+  /** 'play' is the quick start screen; 'garage' is cars, paint and upgrades. */
+  private view: 'play' | 'garage' = 'play';
+
+  open(view: 'play' | 'garage' = 'play'): Promise<MenuResult> {
+    this.view = view;
     this.el.classList.remove('hidden');
     this.render();
     return new Promise((r) => (this.resolve = r));
   }
 
   private render() {
+    if (this.view === 'garage') this.renderGarage();
+    else this.renderPlay();
+    this.bind();
+  }
+
+  private statBars(spec: CarSpec) {
+    return `<div class="stats">${Object.entries(STAT(spec))
+      .map(([k, v]) => `<span>${k}</span><div class="bar"><i style="width:${Math.round(v * 100)}%"></i></div>`)
+      .join('')}</div>`;
+  }
+
+  private renderPlay() {
     const s = this.save.data;
+    // the play screen always shows a car you can actually drive
+    if (!s.owned.includes(this.car)) {
+      this.car = s.car;
+      this.paint = s.paints[this.car] ?? 0;
+    }
     const spec = CARS.find((c) => c.id === this.car)!;
-    const owned = s.owned.includes(this.car);
-    const st = STAT(spec);
-    const u = this.save.upgrades(this.car);
     const best = s.bestBySeed[this.seed.toUpperCase()] ?? 0;
+    const next = CARS.filter((c) => !s.owned.includes(c.id)).sort((x, y) => x.price - y.price)[0];
+    const u = this.save.upgrades(this.car);
+    const canBuy =
+      CARS.some((c) => !s.owned.includes(c.id) && s.credits >= c.price) ||
+      (['engine', 'grip', 'boost', 'armor'] as (keyof Upgrades)[]).some((k) => u[k] < 3 && s.credits >= UPGRADE_COST[u[k]]);
     this.el.innerHTML = `
       <div class="panel">
         <div>
@@ -72,9 +91,10 @@ export class TitleMenu {
             <button class="btn" id="rnd" title="Random seed">🎲</button><button class="btn" id="daily">DAILY</button></div>
           <div class="best" style="margin-top:6px">BEST ON THIS SEED: ${best.toLocaleString()}</div>
           <div style="margin-top:22px" class="row">
-            <button class="btn primary" id="go" ${owned ? '' : 'disabled'}>${this.inGame ? 'APPLY & DRIVE' : 'DRIVE'}</button>
+            <button class="btn primary" id="go">${this.inGame ? 'APPLY & DRIVE' : 'DRIVE'}</button>
           </div>
-          <label style="margin-top:22px">CONTROLS</label>
+          <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive · <kbd>SPACE</kbd> drift · <kbd>SHIFT</kbd> boost · <kbd>R</kbd> reset · <kbd>P</kbd> pause · 🎮 ok</div>
+          <details class="all-controls"><summary>ALL CONTROLS</summary>
           <div class="controls">
             <kbd>W</kbd><kbd>S</kbd> throttle / brake-reverse<br>
             <kbd>A</kbd><kbd>D</kbd> steer · air roll<br>
@@ -87,20 +107,46 @@ export class TitleMenu {
             <kbd>F</kbd> photo mode · <kbd>P</kbd>/<kbd>ESC</kbd> pause<br>
             <kbd>M</kbd> radio · <kbd>\`</kbd> debug panel<br>
             🎮 gamepad supported
-          </div>
+          </div></details>
         </div>
+        <div class="car-card">
+          <div class="row" style="justify-content:space-between;align-items:baseline"><label style="margin:0">YOUR CAR</label><div class="credits">${s.credits.toLocaleString()} CR</div></div>
+          <div class="car-name">${spec.name}</div>
+          <div class="tagline">${spec.tagline}</div>
+          ${this.statBars(spec)}
+          ${
+            next
+              ? `<div class="unlock"><span>NEXT UNLOCK · <b>${next.name}</b></span><div class="bar"><i style="width:${Math.min(100, Math.round((s.credits / next.price) * 100))}%"></i></div><span>${Math.min(s.credits, next.price).toLocaleString()} / ${next.price.toLocaleString()} CR</span></div>`
+              : ''
+          }
+          <button class="btn garage-btn" id="garage">GARAGE ▸${canBuy ? '<i class="dot" title="Something new to buy"></i>' : ''}</button>
+        </div>
+      </div>`;
+  }
+
+  private renderGarage() {
+    const s = this.save.data;
+    const spec = CARS.find((c) => c.id === this.car)!;
+    const owned = s.owned.includes(this.car);
+    const u = this.save.upgrades(this.car);
+    this.el.innerHTML = `
+      <div class="panel garage">
         <div>
-          <div class="row" style="justify-content:space-between;align-items:baseline"><label style="margin:0">GARAGE</label><div class="credits">${s.credits.toLocaleString()} CR</div></div>
-          <div class="cars" style="margin-top:8px">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <button class="btn" id="back">◂ BACK</button>
+            <div class="credits">${s.credits.toLocaleString()} CR</div>
+          </div>
+          <label>GARAGE</label>
+          <div class="cars">
             ${CARS.map(
               (c) => `<div class="car ${c.id === this.car ? 'sel' : ''} ${s.owned.includes(c.id) ? '' : 'locked'}" data-car="${c.id}">
                 <b>${c.name}</b><span>${c.tagline}</span><i>${s.owned.includes(c.id) ? 'OWNED' : '🔒 ' + c.price.toLocaleString() + ' CR'}</i></div>`,
             ).join('')}
           </div>
-          <div class="stats">${Object.entries(st)
-            .map(([k, v]) => `<span>${k}</span><div class="bar"><i style="width:${Math.round(v * 100)}%"></i></div>`)
-            .join('')}</div>
+          ${this.statBars(spec)}
           ${owned ? '' : `<div style="margin-top:10px"><button class="btn" id="buy" ${s.credits >= spec.price ? '' : 'disabled'}>BUY ${spec.name} · ${spec.price.toLocaleString()} CR</button></div>`}
+        </div>
+        <div>
           <label>PAINT</label>
           <div class="swatches">${PAINTS.map(
             (p, i) =>
@@ -113,34 +159,57 @@ export class TitleMenu {
               <button class="btn" data-upg="${k}" ${owned && u[k] < 3 && s.credits >= UPGRADE_COST[u[k]] ? '' : 'disabled'}>${u[k] >= 3 ? 'MAX' : UPGRADE_COST[u[k]].toLocaleString()}</button>`,
             )
             .join('')}</div>
+          <div style="margin-top:24px" class="row">
+            <button class="btn primary" id="go" ${owned ? '' : 'disabled'}>${owned ? 'DRIVE' : 'BUY TO DRIVE'}</button>
+          </div>
         </div>
       </div>`;
-    const q = (id: string) => this.el.querySelector('#' + id) as HTMLElement;
-    const seedInput = q('seed') as HTMLInputElement;
-    seedInput.addEventListener('input', () => (this.seed = seedInput.value.toUpperCase() || 'SEEDRUNNER'));
-    seedInput.addEventListener('keydown', (e) => e.stopPropagation());
-    q('rnd').onclick = () => {
+  }
+
+  private bind() {
+    const q = (id: string) => this.el.querySelector('#' + id) as HTMLElement | null;
+    const seedInput = q('seed') as HTMLInputElement | null;
+    if (seedInput) {
+      seedInput.addEventListener('input', () => (this.seed = seedInput.value.toUpperCase() || 'SEEDRUNNER'));
+      seedInput.addEventListener('keydown', (e) => e.stopPropagation());
+    }
+    const on = (id: string, fn: () => void) => {
+      const el = q(id);
+      if (el) el.onclick = fn;
+    };
+    on('rnd', () => {
       this.seed = randomSeed();
       this.render();
-    };
-    q('daily').onclick = () => {
+    });
+    on('daily', () => {
       this.seed = dailySeed();
       this.render();
-    };
-    q('go').onclick = () => {
+    });
+    on('garage', () => {
+      this.view = 'garage';
+      this.render();
+    });
+    on('back', () => {
+      this.view = 'play';
+      this.render();
+    });
+    on('go', () => {
       if (!this.save.data.owned.includes(this.car)) return;
       this.save.data.car = this.car;
       this.save.data.paints[this.car] = this.paint;
       this.save.write();
       this.el.classList.add('hidden');
       this.resolve({ seed: this.seed.trim().toUpperCase() || 'SEEDRUNNER', car: this.car, paint: this.paint });
-    };
-    const buy = this.el.querySelector('#buy') as HTMLButtonElement | null;
-    if (buy) buy.onclick = () => this.save.buyCar(this.car) && this.render();
+    });
+    on('buy', () => this.save.buyCar(this.car) && this.render());
     this.el.querySelectorAll<HTMLElement>('.car').forEach((el) => {
       el.onclick = () => {
         this.car = el.dataset.car!;
         this.paint = this.save.data.paints[this.car] ?? 0;
+        if (this.save.data.owned.includes(this.car)) {
+          this.save.data.car = this.car;
+          this.save.write();
+        }
         this.render();
       };
     });
