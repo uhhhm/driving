@@ -7,6 +7,8 @@ const fmt = (n: number) => Math.round(n).toLocaleString('en-US');
 
 export class HUD {
   root: HTMLDivElement;
+  /** top-left stack: Road School goal + event/pursuit panel share it so they never overlap */
+  topLeft: HTMLDivElement;
   private speedo: HTMLCanvasElement;
   private sctx: CanvasRenderingContext2D;
   private combo: HTMLDivElement;
@@ -36,7 +38,7 @@ export class HUD {
     r.id = 'hud';
     r.innerHTML = `
       <div class="hud-tr"><div class="score"></div><div class="info"></div><div class="heat"></div></div>
-      <div class="hud-event"></div>
+      <div class="hud-tl"><div class="hud-event"></div></div>
       <div class="hud-combo"><div class="combo-mult">x1</div><div class="combo-pot">0</div><div class="combo-live"></div><div class="combo-bar"><i></i></div></div>
       <div class="hud-tricks"></div>
       <div class="hud-toasts"></div>
@@ -58,6 +60,7 @@ export class HUD {
     this.comboLive = q('.combo-live');
     this.tricks = q('.hud-tricks');
     this.toasts = q('.hud-toasts');
+    this.topLeft = q('.hud-tl');
     this.eventPanel = q('.hud-event');
     this.scoreEl = q('.score');
     this.infoEl = q('.info');

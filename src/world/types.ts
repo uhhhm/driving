@@ -119,6 +119,7 @@ export interface ChunkData {
   heights: Float32Array; // (res+1)^2, row-major: z * (res+1) + x
   normals: Float32Array; // 3 per vertex
   colors: Float32Array; // 3 per vertex
+  detail: Float32Array; // 4 per vertex: desert, alpine, coast weight, road-shoulder proximity
   surface: Uint8Array | null; // res*res cells (lod 0 only)
   minH: number;
   maxH: number;

@@ -780,6 +780,9 @@ export class WorldGen {
     const heights = new Float32Array(R1 * R1);
     const normals = new Float32Array(R1 * R1 * 3);
     const colors = new Float32Array(R1 * R1 * 3);
+    // per-vertex hints for the terrain shader's per-pixel detail: desert, alpine, coast weights + road shoulder
+    // (city weight is implied as 1 - the rest)
+    const detail = new Float32Array(R1 * R1 * 4);
     let minH = Infinity;
     let maxH = -Infinity;
     for (let j = 0; j < R1; j++) {
@@ -812,6 +815,10 @@ export class WorldGen {
         colors[v * 3] = c[0] * ao;
         colors[v * 3 + 1] = c[1] * ao;
         colors[v * 3 + 2] = c[2] * ao;
+        detail[v * 4] = wts[v * 4 + Biome.Desert];
+        detail[v * 4 + 1] = wts[v * 4 + Biome.Alpine];
+        detail[v * 4 + 2] = wts[v * 4 + Biome.Coast];
+        detail[v * 4 + 3] = roadW[v];
       }
     }
 
@@ -852,7 +859,7 @@ export class WorldGen {
         if (p.x >= x0 && p.x < x0 + CHUNK && p.z >= z0 && p.z < z0 + CHUNK) setPieces.push(p);
 
     return {
-      cx, cz, lod, res, heights, normals, colors, surface, minH, maxH, props,
+      cx, cz, lod, res, heights, normals, colors, detail, surface, minH, maxH, props,
       road: roadMeshes.road,
       structure: roadMeshes.structure,
       rock: roadMeshes.rock,
