@@ -1,7 +1,9 @@
 // Procedural car meshes with cheap soft-body-ish deformation and detachable parts.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry as RoundedBox } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { CarSpec, BodyStyle } from './VehicleDefs';
+import { worldUniforms } from '../world/Materials';
 
 // Body colour regions (per grid quad). Paint + accent share the vertex-coloured paint material.
 const R_PAINT = 0;
@@ -192,6 +194,71 @@ const TRAFFIC_PROFILES: Record<'sedan' | 'hatch', Profile> = {
   },
 };
 
+/**
+ * Car paint: clear-coated, plus a faint fresnel rim that grows at night so a dark car still has a
+ * readable silhouette against a dark road (the rim takes the paint's own hue, nudged toward the sky).
+ */
+function makePaintMaterial(vertexColors: boolean): THREE.MeshPhysicalMaterial {
+  const m = new THREE.MeshPhysicalMaterial({ vertexColors, roughness: 0.4, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.07 });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uNight = worldUniforms.uNight;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uNight;')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        float rimF = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+        vec3 rimCol = mix(diffuseColor.rgb, vec3(0.55, 0.65, 1.0), 0.45) + 0.08;
+        totalEmissiveRadiance += rimCol * rimF * (0.03 + uNight * 0.55);`,
+      );
+  };
+  return m;
+}
+
+/** Tyre with a rounded sidewall (lathe), axis along X. */
+function tyreGeometry(r: number, w: number, segs: number): THREE.BufferGeometry {
+  const hw = w / 2;
+  const rim = r * 0.66;
+  const bulge = Math.min(0.05, r * 0.12);
+  const pts = [
+    new THREE.Vector2(rim, -hw + 0.01),
+    new THREE.Vector2(r - bulge, -hw),
+    new THREE.Vector2(r - bulge * 0.25, -hw + bulge * 0.6),
+    new THREE.Vector2(r, -hw + bulge * 1.6),
+    new THREE.Vector2(r, hw - bulge * 1.6),
+    new THREE.Vector2(r - bulge * 0.25, hw - bulge * 0.6),
+    new THREE.Vector2(r - bulge, hw),
+    new THREE.Vector2(rim, hw - 0.01),
+  ];
+  return new THREE.LatheGeometry(pts, segs).rotateZ(-Math.PI / 2);
+}
+
+/** Five-spoke wheel (barrel, lip, spokes, hub), face outward along +X; mirrored for the other side. */
+function rimGeometry(r: number, w: number, simple: boolean): THREE.BufferGeometry {
+  const rr = r * 0.64;
+  const parts: THREE.BufferGeometry[] = [];
+  const x = w / 2 - 0.035;
+  // barrel + outer lip
+  parts.push(new THREE.CylinderGeometry(rr, rr, w * 0.8, simple ? 10 : 20, 1, true).rotateZ(Math.PI / 2));
+  parts.push(new THREE.TorusGeometry(rr - 0.012, 0.016, 4, simple ? 10 : 20).rotateY(Math.PI / 2).translate(x, 0, 0));
+  // spokes
+  const spokes = 5;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * Math.PI * 2;
+    const sp = new THREE.BoxGeometry(0.05, rr * 0.82, rr * 0.2).translate(x - 0.02, rr * 0.5, 0);
+    sp.rotateX(a);
+    parts.push(sp);
+  }
+  // hub
+  parts.push(new THREE.CylinderGeometry(rr * 0.24, rr * 0.28, 0.07, 8).rotateZ(Math.PI / 2).translate(x - 0.01, 0, 0));
+  const norm = parts.map((g) => {
+    const n = g.index ? g.toNonIndexed() : g;
+    n.deleteAttribute('uv');
+    return n;
+  });
+  return mergeGeometries(norm)!;
+}
+
 export interface DetachPart {
   name: string;
   mesh: THREE.Mesh;
@@ -200,25 +267,78 @@ export interface DetachPart {
   attached: boolean;
 }
 
-/** Procedural body: a subdivided box warped to the profile, with paint/glass/trim/stripe regions per quad. */
-function buildBodyGeometry(p: Profile, seg: number, style: BodyStyle | 'traffic'): THREE.BufferGeometry {
-  // twice the columns across the width so the twin stripes land on whole quads
+/** Where the wheels sit (body-local, at rest), so the body can wrap arches and fenders around them. */
+interface ArchSpec {
+  z: number[]; // axle positions
+  cy: number; // wheel centre height at rest
+  r: number; // tyre radius
+  inner: number; // |x| of the tyre's inner face
+  outer: number; // |x| of the tyre's outer face
+}
+
+const smooth01 = (e0: number, e1: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+const lerpN = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** Arch opening radius: tyre plus clearance for suspension travel. */
+const archRadius = (a: ArchSpec) => a.r * 1.1 + 0.035;
+/** Nearest axle offset and the arch-circle height there (-Infinity outside the opening). */
+function archAt(a: ArchSpec, z: number) {
+  let dz = Infinity;
+  for (const az of a.z) if (Math.abs(z - az) < Math.abs(dz)) dz = z - az;
+  const rA = archRadius(a);
+  const circ = Math.abs(dz) < rA ? a.cy + Math.sqrt(rA * rA - dz * dz) : -Infinity;
+  return { dz, circ, rA };
+}
+
+/**
+ * Procedural body: a subdivided box warped to the profile, with paint/glass/trim/stripe regions per
+ * quad. With `arches`, the outer columns are lifted into wheel-arch openings (the inner columns stay
+ * down and become a dark wheel-well liner), low hoods grow fender bulges over the tyres, and the
+ * lower body flares out so the tyres tuck under the bodywork.
+ */
+function buildBodyGeometry(p: Profile, seg: number, style: BodyStyle | 'traffic', arches?: ArchSpec): THREE.BufferGeometry {
+  // twice the columns across the width so the twin stripes land on whole quads; five per unit of
+  // seg along the length so the arches come out round
   const ySeg = Math.max(4, seg / 2 + 1);
-  const box = new THREE.BoxGeometry(1, 1, 1, seg * 2, ySeg, seg * 2);
+  const zSeg = seg * 5;
+  const box = new THREE.BoxGeometry(1, 1, 1, seg * 2, ySeg, zSeg);
   const pos = box.attributes.position;
+  const halfW = p.width / 2;
   for (let i = 0; i < pos.count; i++) {
     const nx = pos.getX(i) * 2; // -1..1
     // bunch rows toward the bottom: a thin sill row and taller glass rows
     const ny = Math.pow(pos.getY(i) + 0.5, 1.6); // 0..1
     const nz = pos.getZ(i) * 2; // -1..1
-    const top = p.top(nz);
+    let top = p.top(nz);
     let y = p.bottom + ny * (top - p.bottom);
+    let w = halfW;
+    // taper nose and tail in plan
+    w *= 1 - p.noseTaper * Math.max(0, nz) ** 2 - 0.05 * Math.max(0, -nz) ** 3;
+    if (arches) {
+      const zm = (nz * p.length) / 2;
+      const { dz, circ, rA } = archAt(arches, zm);
+      const ad = Math.abs(dz);
+      const xn = Math.abs(nx);
+      const innerN = (arches.inner - 0.06) / halfW;
+      const lift = smooth01(innerN - 0.14, innerN, xn); // outer columns open up, inner ones form the well
+      const near = smooth01(rA * 1.5, rA * 0.75, ad);
+      const fenderTop = arches.cy + rA + 0.07;
+      const ceil = Math.min(p.beltline, top);
+      // a hood lower than the tyre grows a fender bulge over it (outer part of the width only)
+      const ceil2 = ceil < fenderTop ? lerpN(ceil, fenderTop, near * smooth01(innerN - 0.4, innerN - 0.1, xn)) : ceil;
+      const bottom2 = lerpN(p.bottom, Math.max(p.bottom, circ), lift);
+      if (y <= ceil + 1e-6) y = bottom2 + ((y - p.bottom) * (ceil2 - bottom2)) / Math.max(1e-3, ceil - p.bottom);
+      if (top <= ceil + 1e-6) top = ceil2;
+      // flare the lower body so the tyre sits under it
+      const flareW = arches.outer + 0.035;
+      if (flareW > w) w = lerpN(w, flareW, near * smooth01(fenderTop + 0.22, fenderTop - 0.04, y));
+    }
     // round the nose/tail
     const ends = Math.pow(Math.abs(nz), 6);
     y = Math.min(y, top - ends * 0.12);
-    let w = p.width / 2;
-    // taper nose and tail in plan
-    w *= 1 - p.noseTaper * Math.max(0, nz) ** 2 - 0.05 * Math.max(0, -nz) ** 3;
     // tumblehome above beltline
     if (y > p.beltline) w *= 1 - p.tumble * Math.min(1, (y - p.beltline) / 0.45);
     // soften vertical edges
@@ -239,6 +359,10 @@ function buildBodyGeometry(p: Profile, seg: number, style: BodyStyle | 'traffic'
   const fn = faceNormals(src);
   const stripes = style === 'muscle' || style === 'coupe' || style === 'wedge';
   const regionOf = new Uint8Array(quads);
+  // B-pillar: one blacked-out column mid-way along long side windows
+  const zStep = 2 / zSeg;
+  const cabinLen = p.cabinZ[1] - p.cabinZ[0];
+  const pillarZ = cabinLen >= 0.75 && style !== 'wedge' && !p.sideWindow ? (Math.floor((p.cabinZ[0] + cabinLen * 0.45) / zStep) + 0.5) * zStep : NaN;
   for (let qd = 0; qd < quads; qd++) {
     let cx = 0, cy = 0, cz = 0;
     for (let k = 0; k < 6; k++) {
@@ -256,7 +380,10 @@ function buildBodyGeometry(p: Profile, seg: number, style: BodyStyle | 'traffic'
     const side = Math.abs(nx) > 0.5;
     const sw = side ? p.sideWindow : undefined;
     const inCabin = sw ? zn > sw.z[0] && zn < sw.z[1] && cy < (sw.yMax ?? Infinity) : zn > p.cabinZ[0] && zn < p.cabinZ[1];
-    if (cy > p.beltline + 0.05 && inCabin && ny < 0.92) r = R_GLASS;
+    const well = arches ? archAt(arches, cz) : null;
+    if (well && ny < 0.3 && Math.abs(well.dz) < well.rA && cy < well.circ + 0.03 && Math.abs(cx) < arches!.outer) r = R_TRIM; // wheel well liner (faces sideways/down; never the hood)
+    else if (cy > p.beltline + 0.05 && inCabin && ny < 0.92) r = side && Math.abs(zn - pillarZ) < zStep * 0.5 ? R_TRIM : R_GLASS;
+    else if (style === 'van' && fz / l < -0.9 && cy > p.beltline + 0.05 && cy < 2.0 && Math.abs(cx) > 0.1 && Math.abs(cx) < p.width / 2 - 0.2) r = R_GLASS; // rear-door windows
     else if (ny < -0.5 || (cy < p.bottom + 0.11 && Math.abs(nx) > 0.5)) r = R_TRIM; // underside + side sills
     else if (stripes && Math.abs(cx) > 0.08 && Math.abs(cx) < 0.24) r = R_ACCENT;
     else if (style === 'van' && cy > 0.95 && cy < 1.3 && ny < 0.5 && zn < p.cabinZ[0] + 0.1) r = R_ACCENT; // band on the box, not the sloped cab
@@ -291,7 +418,9 @@ export class CarModel {
   body: THREE.Mesh;
   wheels: THREE.Group[] = [];
   parts: DetachPart[] = [];
-  paint: THREE.MeshStandardMaterial;
+  paint: THREE.MeshPhysicalMaterial;
+  /** same paint without vertex colours, for bolt-on body-colour parts (bumpers, armrests) */
+  paintSolid: THREE.MeshPhysicalMaterial;
   private basePos: Float32Array;
   private deform: Float32Array;
   private crease: CreaseShare;
@@ -299,6 +428,7 @@ export class CarModel {
   private followers: { obj: THREE.Object3D; anchor: THREE.Vector3; vi: number; part?: DetachPart; sag: number }[] = [];
   headlights: THREE.Mesh[] = [];
   taillights: THREE.MeshBasicMaterial;
+  private tailStrip: THREE.MeshBasicMaterial;
   headMat: THREE.MeshBasicMaterial;
   exhausts: THREE.Vector3[] = [];
   flames: THREE.Mesh[] = [];
@@ -309,10 +439,24 @@ export class CarModel {
   constructor(spec: CarSpec, opts: { paint?: number; accent?: number; plate?: string; police?: boolean; simple?: boolean } = {}) {
     this.spec = spec;
     const prof = PROFILES[spec.style];
-    this.paint = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.35 });
-    const glass = new THREE.MeshStandardMaterial({ color: 0x0a0d13, roughness: 0.06, metalness: 0.7, envMapIntensity: 1.4 });
+    this.paint = makePaintMaterial(true);
+    this.paintSolid = makePaintMaterial(false);
+    // tinted, sky-reflecting glass: dark enough to read as glass, light enough to show the cabin shape
+    const glass = new THREE.MeshStandardMaterial({ color: 0x1e2a38, roughness: 0.05, metalness: 0.85, envMapIntensity: 1.7 });
     const trim = new THREE.MeshStandardMaterial({ color: 0x121316, roughness: 0.8, metalness: 0.1 });
-    const geo = buildBodyGeometry(prof, opts.simple ? 4 : 8, spec.style);
+    // wheels at rest: mount height minus the spring's static extension (+ a little measured sag)
+    const omega = 2 * Math.PI * spec.freq;
+    const arches: ArchSpec | undefined =
+      spec.style === 'couch'
+        ? undefined
+        : {
+            z: [spec.wheelZf, spec.wheelZr],
+            cy: spec.wheelY - spec.restLen + 9.81 / (omega * omega) + 0.03,
+            r: spec.wheelR,
+            inner: spec.wheelX - spec.wheelW / 2,
+            outer: spec.wheelX + spec.wheelW / 2,
+          };
+    const geo = buildBodyGeometry(prof, opts.simple ? 4 : 8, spec.style, arches);
     this.basePos = (geo.attributes.position.array as Float32Array).slice();
     this.deform = new Float32Array(this.basePos.length);
     this.crease = buildCreaseShare(this.basePos, 32);
@@ -324,43 +468,95 @@ export class CarModel {
     this.root.add(this.bodyGroup);
     this.setPaint(opts.paint ?? spec.color, opts.accent ?? spec.accent);
 
-    // lights
+    // lights: bright lens in a dark housing; a full-width strip joins the tail lights so the rear
+    // reads as one graphic (and stays visible at night)
     this.headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.97, 0.85).multiplyScalar(2.5) });
     this.taillights = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.42, 0, 0) });
+    this.tailStrip = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 0, 0) });
+    const housing = new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.25, metalness: 0.6 });
     const L = prof.length / 2;
     const W = prof.width / 2;
     if (spec.style !== 'couch') {
-      const hy = prof.top(0.98) - 0.18;
+      const hy = Math.max(prof.bottom + 0.2, prof.top(0.98) - 0.18);
+      const ty = prof.top(-0.98) - 0.15;
+      const hx = W - 0.32 - prof.noseTaper * 0.5;
       for (const s of [-1, 1]) {
-        const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.05), this.headMat);
-        hl.position.set(s * (W - 0.32 - prof.noseTaper * 0.5), Math.max(prof.bottom + 0.2, hy), L - 0.01);
+        const hh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.05), housing);
+        hh.position.set(s * hx, hy, L - 0.012);
+        this.bodyGroup.add(hh);
+        const hl = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 0.05), this.headMat);
+        hl.position.set(s * hx, hy, L + 0.002);
         this.bodyGroup.add(hl);
         this.headlights.push(hl);
+        const th = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.19, 0.05), housing);
+        th.position.set(s * (W - 0.3), ty, -L + 0.012);
+        this.bodyGroup.add(th);
         const tl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.05), this.taillights);
-        tl.position.set(s * (W - 0.3), prof.top(-0.98) - 0.15, -L + 0.01);
+        tl.position.set(s * (W - 0.3), ty, -L - 0.002);
         this.bodyGroup.add(tl);
+      }
+      if (spec.style === 'coupe' || spec.style === 'wedge' || spec.style === 'muscle') {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(W * 2 - 1.15, 0.035, 0.04), this.tailStrip);
+        strip.position.set(0, ty, -L - 0.002);
+        this.bodyGroup.add(strip);
+      }
+      // grille between the headlights
+      if (spec.style !== 'wedge') {
+        const gw = Math.max(0.3, hx * 2 - 0.62);
+        const grille = new THREE.Mesh(new THREE.BoxGeometry(gw, spec.style === 'truck' || spec.style === 'van' ? 0.3 : 0.16, 0.04), housing);
+        grille.position.set(0, Math.max(prof.bottom + 0.2, hy - 0.04), L - 0.004);
+        this.bodyGroup.add(grille);
       }
     }
     this.addStyleExtras(spec, prof, opts);
     if (opts.plate && spec.style !== 'couch') this.addPlate(opts.plate, prof);
-    // wheels
-    const tireMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
-    const rimMat = new THREE.MeshStandardMaterial({ color: spec.style === 'muscle' ? 0xc0c0c0 : 0x2a2a2e, roughness: 0.3, metalness: 0.8 });
-    const tg = new THREE.CylinderGeometry(spec.wheelR, spec.wheelR, spec.wheelW, opts.simple ? 10 : 18).rotateZ(Math.PI / 2);
-    const rg = new THREE.CylinderGeometry(spec.wheelR * 0.62, spec.wheelR * 0.62, spec.wheelW + 0.02, opts.simple ? 6 : 10).rotateZ(Math.PI / 2);
-    const spoke = new THREE.BoxGeometry(spec.wheelW + 0.03, spec.wheelR * 1.1, 0.06);
+    // wheels: rounded tyre, bright five-spoke rim (mirrored per side), accent-coloured brake caliper
+    // that steers with the wheel but doesn't spin
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.92 });
+    const rimColor = spec.style === 'muscle' ? 0xd8d8dc : spec.style === 'truck' ? 0x3a3c40 : spec.style === 'van' ? 0xe8e8e8 : 0xb9bcc4;
+    const rimMat = new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.28, metalness: 0.85, side: THREE.DoubleSide });
+    const wheelBack = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.7, metalness: 0.3 });
+    const caliperMat = new THREE.MeshStandardMaterial({ color: spec.style === 'muscle' || spec.style === 'van' ? 0xd8321e : opts.accent ?? spec.accent, roughness: 0.4, metalness: 0.3 });
+    const discMat = new THREE.MeshStandardMaterial({ color: 0x55575c, roughness: 0.35, metalness: 0.9 });
+    const tg = tyreGeometry(spec.wheelR, spec.wheelW, opts.simple ? 12 : 22);
+    const rg = rimGeometry(spec.wheelR, spec.wheelW, !!opts.simple);
+    const rgL = rg.clone().scale(-1, 1, 1);
+    // mirroring flips winding: fix the normals' facing by flipping the index-free triangles
+    const pa = rgL.attributes.position.array as Float32Array;
+    const na = rgL.attributes.normal.array as Float32Array;
+    for (let t = 0; t < pa.length; t += 9)
+      for (const arr of [pa, na])
+        for (let k = 0; k < 3; k++) {
+          const tmp = arr[t + 3 + k];
+          arr[t + 3 + k] = arr[t + 6 + k];
+          arr[t + 6 + k] = tmp;
+        }
+    const backG = new THREE.CylinderGeometry(spec.wheelR * 0.64, spec.wheelR * 0.64, 0.02, opts.simple ? 10 : 20).rotateZ(Math.PI / 2);
+    const discG = new THREE.CylinderGeometry(spec.wheelR * 0.5, spec.wheelR * 0.5, 0.03, 16).rotateZ(Math.PI / 2);
+    const caliperG = new THREE.BoxGeometry(0.06, spec.wheelR * 0.38, spec.wheelR * 0.42);
     for (let i = 0; i < 4; i++) {
+      // wheel order matches Vehicle: front +x, front -x, rear +x, rear -x
+      const side = i % 2 === 0 ? 1 : -1;
       const g = new THREE.Group();
       const spin = new THREE.Group();
       const t = new THREE.Mesh(tg, tireMat);
       t.castShadow = true;
       spin.add(t);
-      spin.add(new THREE.Mesh(rg, rimMat));
-      spin.add(new THREE.Mesh(spoke, rimMat));
-      const sp2 = new THREE.Mesh(spoke, rimMat);
-      sp2.rotation.x = Math.PI / 2;
-      spin.add(sp2);
+      spin.add(new THREE.Mesh(side > 0 ? rg : rgL, rimMat));
+      const back = new THREE.Mesh(backG, wheelBack); // the wheel's inner face, seen between the spokes
+      back.position.x = -side * 0.04;
+      spin.add(back);
+      if (!opts.simple) {
+        const disc = new THREE.Mesh(discG, discMat);
+        disc.position.x = side * (spec.wheelW / 2 - 0.13);
+        spin.add(disc);
+      }
       g.add(spin);
+      if (!opts.simple) {
+        const cal = new THREE.Mesh(caliperG, caliperMat);
+        cal.position.set(side * (spec.wheelW / 2 - 0.1), spec.wheelR * 0.22, (i < 2 ? -1 : 1) * spec.wheelR * 0.18);
+        g.add(cal);
+      }
       this.wheels.push(g);
       this.root.add(g);
     }
@@ -406,6 +602,7 @@ export class CarModel {
       C.setXYZ(i, c.r, c.g, c.b);
     }
     C.needsUpdate = true;
+    this.paintSolid?.color.setHex(paint);
   }
 
   /** Rear licence plate showing the world seed. */
@@ -451,10 +648,18 @@ export class CarModel {
     };
     // bumpers
     if (spec.style !== 'couch') {
-      // slim charcoal bumpers so the body, not a black slab, reads from the chase cam
-      const bumper = new THREE.MeshStandardMaterial({ color: 0x2a2c31, roughness: 0.55, metalness: 0.25 });
-      addPart('front bumper', new THREE.BoxGeometry(p.width * 0.96, 0.15, 0.16), bumper, 0, p.bottom + 0.09, L + 0.04, 35);
-      addPart('rear bumper', new THREE.BoxGeometry(p.width * 0.96, 0.15, 0.16), bumper, 0, p.bottom + 0.09, -L - 0.04, 35);
+      // body-colour bumpers with a dark splitter / diffuser lip, so the car reads as one shape
+      const lipMat = new THREE.MeshStandardMaterial({ color: 0x1a1b1f, roughness: 0.6, metalness: 0.2 });
+      const truckish = spec.style === 'truck' || spec.style === 'van';
+      for (const end of [1, -1]) {
+        const bw = p.width * (end > 0 ? 0.94 - p.noseTaper * 0.5 : 0.95);
+        const bumperGeo = new RoundedBox(bw, 0.17, 0.17, 2, 0.05);
+        const b = addPart(end > 0 ? 'front bumper' : 'rear bumper', bumperGeo, truckish ? lipMat : this.paintSolid, 0, p.bottom + 0.1, end * (L + 0.035), 35);
+        const lip = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.92, 0.04, 0.22), lipMat);
+        lip.position.set(0, -0.09, end * 0.02);
+        lip.castShadow = true;
+        b.add(lip);
+      }
       for (const s of [-1, 1]) {
         addPart('mirror', new THREE.BoxGeometry(0.2, 0.12, 0.16), accentMat, s * (W + 0.05), p.beltline + 0.05, L * (p.cabinZ[1] - 0.05), 10);
       }
@@ -494,7 +699,7 @@ export class CarModel {
       case 'couch': {
         const cushion = new THREE.MeshStandardMaterial({ color: opts.accent ?? spec.accent, roughness: 0.95 });
         for (let i = -1; i <= 1; i++) addPart('cushion', new THREE.BoxGeometry(0.66, 0.2, 0.75), cushion, i * 0.68, 1.02, 0.1, 15);
-        for (const s of [-1, 1]) addPart('armrest', new THREE.BoxGeometry(0.25, 0.4, 1.6), this.paint, s * 1.05, 1.12, 0, 40);
+        for (const s of [-1, 1]) addPart('armrest', new RoundedBox(0.25, 0.4, 1.6, 2, 0.08), this.paintSolid, s * 1.05, 1.12, 0, 40);
         // the jet engine
         const jet = new THREE.Group();
         const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 1.4, 16, 1, true).rotateX(Math.PI / 2), chrome);
@@ -639,6 +844,7 @@ export class CarModel {
     // keep green/blue near zero so tone mapping + bloom read red, not orange; reverse lights are white
     if (reverse) this.taillights.color.setRGB(1, 0.95, 0.9).multiplyScalar(on ? 2.5 : 1.2);
     else this.taillights.color.setRGB(on ? 1.3 : 0.42, 0.0, 0.0);
+    this.tailStrip.color.setRGB(on && !reverse ? 0.75 : 0.2, 0.0, 0.0);
   }
 
   setHeadlights(intensity: number) {
@@ -671,7 +877,8 @@ export function trafficGeometry(kind: 'sedan' | 'truck' | 'bus' | 'hatch'): THRE
   };
   if (kind === 'sedan' || kind === 'hatch') {
     const p = TRAFFIC_PROFILES[kind];
-    const body = buildBodyGeometry(p, 4, 'traffic');
+    // wheels below: r 0.33 at y = r, x ±0.82 (0.26 wide), z 1.35 / -1.3
+    const body = buildBodyGeometry(p, 4, 'traffic', { z: [1.35, -1.3], cy: 0.33, r: 0.33, inner: 0.69, outer: 0.95 });
     applyCreasedNormals(body, buildCreaseShare(body.attributes.position.array, 32));
     const src = body.attributes.region.array;
     const reg = new Float32Array(src.length);
